@@ -274,6 +274,8 @@ int x264_param_parse( x264_param_t *p, const char *name, const char *value )
             free( buf );
         }
     }
+    OPT("opencl")
+        p->b_opencl = atobool(value);
     OPT("threads")
     {
         if( !strcmp(value, "auto") )

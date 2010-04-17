@@ -24,6 +24,10 @@
 #ifndef X264_FRAME_H
 #define X264_FRAME_H
 
+#ifdef HAVE_OPENCL
+#include "opencl/opencl.h"
+#endif
+
 /* number of pixels past the edge of the frame, for motion estimation/compensation */
 #define PADH 32
 #define PADV 32
@@ -116,6 +120,10 @@ typedef struct x264_frame
     x264_pthread_mutex_t mutex;
     x264_pthread_cond_t  cv;
 
+    void    (*delete)( struct x264_frame *frame ); /* to free GPU resources */
+#ifdef HAVE_OPENCL
+    x264_opencl_frame_t opencl;
+#endif
 } x264_frame_t;
 
 /* synchronized frame list */

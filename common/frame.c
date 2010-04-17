@@ -156,6 +156,9 @@ x264_frame_t *x264_frame_new( x264_t *h, int b_fdec )
         }
     }
 
+    if( h->gpuf.frame_new )
+        if( h->gpuf.frame_new( h, frame, b_fdec ) )
+            goto fail;
     if( x264_pthread_mutex_init( &frame->mutex, NULL ) )
         goto fail;
     if( x264_pthread_cond_init( &frame->cv, NULL ) )
@@ -207,6 +210,8 @@ void x264_frame_delete( x264_frame_t *frame )
         x264_free( frame->ref[1] );
         x264_pthread_mutex_destroy( &frame->mutex );
         x264_pthread_cond_destroy( &frame->cv );
+        if( frame->delete )
+            frame->delete( frame );
     }
     x264_free( frame );
 }

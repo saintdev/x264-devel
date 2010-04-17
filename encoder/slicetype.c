@@ -1316,6 +1316,11 @@ void x264_slicetype_decide( x264_t *h )
             }
         }
     }
+    // hack to use MVs from lookahead
+    else if( h->param.b_opencl )
+    {
+//        x264_opencl_pyramid_me( h,  );
+    }
 
     /* Analyse for weighted P frames */
     if( !h->param.rc.b_stat_read && h->lookahead->next.list[bframes]->i_type == X264_TYPE_P

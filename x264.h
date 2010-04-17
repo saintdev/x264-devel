@@ -317,6 +317,9 @@ typedef struct x264_param_t
     int i_slice_max_mbs;     /* Max number of MBs per slice; overrides i_slice_count. */
     int i_slice_count;       /* Number of slices per frame: forces rectangular slices. */
 
+    int b_opencl;            /* use OpenCL me */
+    int i_pyramid_steps;     /* number of times to downsample in pyramid me */
+
     /* Optional callback for freeing this x264_param_t when it is done being used.
      * Only used when the x264_param_t sits in memory for an indefinite period of time,
      * i.e. when an x264_param_t is passed to x264_t in an x264_picture_t or in zones.

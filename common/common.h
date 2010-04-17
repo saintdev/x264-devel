@@ -104,6 +104,7 @@ typedef union { uint64_t i; uint32_t a[2]; uint16_t b[4]; uint8_t c[8]; } MAY_AL
 #include "cabac.h"
 #include "quant.h"
 #include "config.h"
+#include "gpu.h"
 
 /****************************************************************************
  * General functions
@@ -736,9 +737,13 @@ struct x264_t
     x264_zigzag_function_t zigzagf;
     x264_quant_function_t quantf;
     x264_deblock_function_t loopf;
+    x264_gpu_function_t   gpuf;
 
 #if VISUALIZE
     struct visualize_t *visualize;
+#endif
+#ifdef HAVE_OPENCL
+    x264_opencl_t   opencl;
 #endif
     x264_lookahead_t *lookahead;
 };

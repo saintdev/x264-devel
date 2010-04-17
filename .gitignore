@@ -5,6 +5,7 @@
 *.exe
 *.mo
 *.o
+*.e
 *.pc
 *.pot
 *.so*

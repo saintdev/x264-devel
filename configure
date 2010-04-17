@@ -11,6 +11,7 @@ echo "  --disable-avs-input      disables avisynth input (win32 only)"
 echo "  --disable-mp4-output     disables mp4 output (using gpac)"
 echo "  --disable-pthread        disables multithreaded encoding"
 echo "  --disable-asm            disables assembly optimizations on x86 and arm"
+echo "  --enable-opencl          enables OpenCL optimizations"
 echo "  --enable-debug           adds -g, doesn't strip"
 echo "  --enable-gprof           adds -pg, doesn't strip"
 echo "  --enable-visualize       enables visualization (X11 only)"
@@ -37,6 +38,10 @@ as_check() {
     $AS conftest.asm $ASFLAGS $2 -o conftest.o 2>$DEVNULL
 }
 
+run_check() {
+    "$@" 2>$DEVNULL
+}
+
 die() {
     echo "$@"
     exit 1
@@ -55,6 +60,7 @@ avs_input="auto"
 mp4_output="auto"
 pthread="auto"
 asm="yes"
+opencl="no"
 debug="no"
 gprof="no"
 pic="no"
@@ -126,6 +132,9 @@ for opt do
             ;;
         --disable-pthread)
             pthread="no"
+            ;;
+        --enable-opencl)
+            opencl="yes"
             ;;
         --enable-debug)
             debug="yes"
@@ -402,6 +411,16 @@ if test "$pthread" = "yes" ; then
     LDFLAGS="$LDFLAGS $libpthread"
 fi
 
+if [ "$opencl" = "yes" ] ; then
+    run_check perl -e "" || die "perl not found; required for OpenCL"
+    CFLAGS="$CFLAGS -DHAVE_OPENCL"
+    if [ "$SYS" = "MACOSX" ] ; then
+        LDFLAGS="$LDFLAGS -framework OpenCL"
+    else
+        LDFLAGS="$LDFLAGS -lOpenCL"
+    fi
+fi
+
 MP4_LDFLAGS="-lgpac_static"
 if [ $SYS = MINGW ]; then
     MP4_LDFLAGS="$MP4_LDFLAGS -lwinmm"
@@ -495,6 +514,8 @@ EXE=$EXE
 VIS=$vis
 HAVE_GETOPT_LONG=$HAVE_GETOPT_LONG
 DEVNULL=$DEVNULL
+PERL=${PERL-perl}
+OPENCL=$opencl
 EOF
 
 if [ "$shared" = "yes" ]; then
@@ -543,6 +564,7 @@ echo "asm:        $asm"
 echo "avs input:  $avs_input"
 echo "mp4 output: $mp4_output"
 echo "pthread:    $pthread"
+echo "OpenCL:     $opencl"
 echo "debug:      $debug"
 echo "gprof:      $gprof"
 echo "PIC:        $pic"

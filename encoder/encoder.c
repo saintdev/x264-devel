@@ -421,6 +421,14 @@ static int x264_validate_parameters( x264_t *h )
     else
         h->param.b_sliced_threads = 0;
 
+#ifndef HAVE_OPENCL
+    if( h->param.b_opencl )
+    {
+        x264_log( h, X264_LOG_WARNING, "not compiled with OpenCL support!\n" );
+        h->param.b_opencl = 0;
+    }
+#endif
+
     if( h->param.b_interlaced )
     {
         if( h->param.analyse.i_me_method >= X264_ME_ESA )
@@ -909,7 +917,10 @@ x264_t *x264_encoder_open( x264_param_t *param )
     x264_quant_init( h, h->param.cpu, &h->quantf );
     x264_deblock_init( h->param.cpu, &h->loopf );
     x264_dct_init_weights();
-
+#ifdef HAVE_OPENCL
+    if( x264_opencl_init( h ) )
+        goto fail;
+#endif
     mbcmp_init( h );
 
     p = buf + sprintf( buf, "using cpu capabilities:" );
@@ -2040,6 +2051,10 @@ int     x264_encoder_encode( x264_t *h,
 
         fenc->i_frame = h->frames.i_input++;
 
+        if( h->param.b_opencl )
+            if( h->gpuf.frame_upload( h, fenc ) )
+                return -1;
+
         if( h->frames.b_have_lowres )
         {
             if( h->param.analyse.i_weighted_pred == X264_WEIGHTP_FAKE || h->param.analyse.i_weighted_pred == X264_WEIGHTP_SMART )
@@ -2792,6 +2807,9 @@ void    x264_encoder_close  ( x264_t *h )
         x264_free( h->thread[i]->out.nal);
         x264_free( h->thread[i] );
     }
+#ifdef HAVE_OPENCL
+    x264_opencl_close( h );
+#endif
 }
 
 /****************************************************************************

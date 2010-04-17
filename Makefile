@@ -91,11 +91,17 @@ ASMSRC += common/sparc/pixel.asm
 OBJASM  = $(ASMSRC:%.asm=%.o)
 endif
 
+# OpenCL optims
+ifeq ($(OPENCL),yes)
+SRCS   += common/opencl/host.c
+CLSRCS  = common/opencl/downsample.cl common/opencl/simple_me.cl
+endif
+
 ifneq ($(HAVE_GETOPT_LONG),1)
 SRCS += extras/getopt.c
 endif
 
-OBJS = $(SRCS:%.c=%.o)
+OBJS = $(SRCS:%.c=%.o) $(CLSRCS:%.cl=%.o)
 OBJCLI = $(SRCCLI:%.c=%.o)
 DEP  = depend
 
@@ -123,6 +129,12 @@ checkasm: tools/checkasm.o libx264.a
 %.o: %.S
 	$(AS) $(ASFLAGS) -o $@ $<
 	-@ $(STRIP) -x $@ # delete local/anonymous symbols, so they don't show up in oprofile
+
+%.o: %.cl
+	$(CC) $(CFLAGS) -E -x c -o $(@:%.o=%.e) $<
+	$(PERL) ocl-cc.pl $(@:%.o=%.e)
+	$(CC) $(CFLAGS) -c -x c -o $@ $(@:%.o=%.e)
+	-rm $(@:%.o=%.e)
 
 .depend: config.mak
 	rm -f .depend
