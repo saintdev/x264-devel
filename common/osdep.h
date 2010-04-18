@@ -27,11 +27,19 @@
 #define _LARGEFILE_SOURCE 1
 #define _FILE_OFFSET_BITS 64
 #include <stdio.h>
+#include <sys/stat.h>
+
+#include "config.h"
 
 #ifdef HAVE_STDINT_H
 #include <stdint.h>
 #else
 #include <inttypes.h>
+#endif
+
+#ifndef HAVE_LOG2F
+#define log2f(x) (logf(x)/0.693147180559945f)
+#define log2(x) (log(x)/0.693147180559945)
 #endif
 
 #ifdef _WIN32
@@ -54,12 +62,25 @@
 #define ALIGNED_8( var )  DECLARE_ALIGNED( var, 8 )
 #define ALIGNED_4( var )  DECLARE_ALIGNED( var, 4 )
 
-// current arm compilers only maintain 8-byte stack alignment
-// and cannot align stack variables to more than 8-bytes
+// ARM compiliers don't reliably align stack variables
+// - EABI requires only 8 byte stack alignment to be maintained
+// - gcc can't align stack variables to more even if the stack were to be correctly aligned outside the function
+// - armcc can't either, but is nice enough to actually tell you so
+// - Apple gcc only maintains 4 byte alignment
+// - llvm can align the stack, but only in svn and (unrelated) it exposes bugs in all released GNU binutils...
+#if defined(ARCH_ARM) && defined(SYS_MACOSX)
+#define ALIGNED_ARRAY_8( type, name, sub1, ... )\
+    uint8_t name##_u [sizeof(type sub1 __VA_ARGS__) + 7]; \
+    type (*name) __VA_ARGS__ = (void*)((intptr_t)(name##_u+7) & ~7)
+#else
+#define ALIGNED_ARRAY_8( type, name, sub1, ... )\
+    ALIGNED_8( type name sub1 __VA_ARGS__ )
+#endif
+
 #ifdef ARCH_ARM
 #define ALIGNED_ARRAY_16( type, name, sub1, ... )\
-    ALIGNED_8( uint8_t name##_8 [sizeof(type sub1 __VA_ARGS__) + 8] );\
-    type (*name) __VA_ARGS__ = (void*)(name##_8 + ((intptr_t)name##_8 & 8))
+    uint8_t name##_u [sizeof(type sub1 __VA_ARGS__) + 15];\
+    type (*name) __VA_ARGS__ = (void*)((intptr_t)(name##_u+15) & ~15)
 #else
 #define ALIGNED_ARRAY_16( type, name, sub1, ... )\
     ALIGNED_16( type name sub1 __VA_ARGS__ )
@@ -71,12 +92,14 @@
 #define NOINLINE __attribute__((noinline))
 #define MAY_ALIAS __attribute__((may_alias))
 #define x264_constant_p(x) __builtin_constant_p(x)
+#define x264_nonconstant_p(x) (!__builtin_constant_p(x))
 #else
 #define UNUSED
 #define ALWAYS_INLINE inline
 #define NOINLINE
 #define MAY_ALIAS
 #define x264_constant_p(x) 0
+#define x264_nonconstant_p(x) 0
 #endif
 
 /* threads */
@@ -145,6 +168,8 @@ static inline int x264_pthread_create( x264_pthread_t *t, void *a, void *(*f)(vo
 
 #define WORD_SIZE sizeof(void*)
 
+#define asm __asm__
+
 #if !defined(_WIN64) && !defined(__LP64__)
 #if defined(__INTEL_COMPILER)
 #define BROKEN_STACK_ALIGNMENT /* define it if stack is not mod16 */
@@ -199,17 +224,30 @@ static ALWAYS_INLINE uint16_t endian_fix16( uint16_t x )
 
 #if defined(__GNUC__) && (__GNUC__ > 3 || __GNUC__ == 3 && __GNUC_MINOR__ > 3)
 #define x264_clz(x) __builtin_clz(x)
+#define x264_ctz(x) __builtin_ctz(x)
 #else
 static int ALWAYS_INLINE x264_clz( uint32_t x )
 {
     static uint8_t lut[16] = {4,3,2,2,1,1,1,1,0,0,0,0,0,0,0,0};
-    int y, z = ((x - 0x10000) >> 27) & 16;
+    int y, z = (((x >> 16) - 1) >> 27) & 16;
     x >>= z^16;
     z += y = ((x - 0x100) >> 28) & 8;
     x >>= y^8;
     z += y = ((x - 0x10) >> 29) & 4;
     x >>= y^4;
     return z + lut[x];
+}
+
+static int ALWAYS_INLINE x264_ctz( uint32_t x )
+{
+    static uint8_t lut[16] = {4,0,1,0,2,0,1,0,3,0,1,0,2,0,1,0};
+    int y, z = (((x & 0xffff) - 1) >> 27) & 16;
+    x >>= z;
+    z += y = (((x & 0xff) - 1) >> 28) & 8;
+    x >>= y;
+    z += y = (((x & 0xf) - 1) >> 29) & 4;
+    x >>= y;
+    return z + lut[x&0xf];
 }
 #endif
 

@@ -54,14 +54,15 @@ typedef struct
 
 typedef struct {
     int sad;
-    int16_t mx, my;
+    int16_t mv[2];
 } mvsad_t;
 
 void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, int *p_fullpel_thresh );
-static inline void x264_me_search( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc )
-    { x264_me_search_ref( h, m, mvc, i_mvc, NULL ); }
+#define x264_me_search( h, m, mvc, i_mvc )\
+    x264_me_search_ref( h, m, mvc, i_mvc, NULL )
 
 void x264_me_refine_qpel( x264_t *h, x264_me_t *m );
+void x264_me_refine_qpel_refdupe( x264_t *h, x264_me_t *m, int *p_halfpel_thresh );
 void x264_me_refine_qpel_rd( x264_t *h, x264_me_t *m, int i_lambda2, int i4, int i_list );
 void x264_me_refine_bidir_rd( x264_t *h, x264_me_t *m0, x264_me_t *m1, int i_weight, int i8, int i_lambda2 );
 void x264_me_refine_bidir_satd( x264_t *h, x264_me_t *m0, x264_me_t *m1, int i_weight );
@@ -95,16 +96,6 @@ if((y)<(x))\
     (a)=(b);\
     (c)=(d);\
     (e)=(f);\
-}
-
-#define COPY5_IF_LT(x,y,a,b,c,d,e,f,g,h)\
-if((y)<(x))\
-{\
-    (x)=(y);\
-    (a)=(b);\
-    (c)=(d);\
-    (e)=(f);\
-    (g)=(h);\
 }
 
 #define COPY2_IF_GT(x,y,a,b)\

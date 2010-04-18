@@ -39,17 +39,26 @@ typedef struct x264_frame
     int     i_type;
     int     i_qpplus1;
     int64_t i_pts;
+    int64_t i_reordered_pts;
+    int     i_duration;  /* in SPS time_scale units (i.e 2 * timebase units) used for vfr */
+    int     i_cpb_duration;
+    int     i_cpb_delay; /* in SPS time_scale units (i.e 2 * timebase units) */
+    int     i_dpb_output_delay;
     x264_param_t *param;
 
-    int     i_frame;    /* Presentation frame number */
-    int     i_dts; /* Coded frame number */
+    int     i_frame;     /* Presentation frame number */
+    int     i_coded;     /* Coded frame number */
+    int     i_field_cnt; /* Presentation field count */
     int     i_frame_num; /* 7.4.3 frame_num */
     int     b_kept_as_ref;
+    int     i_pic_struct;
+    int     b_keyframe;
     uint8_t b_fdec;
     uint8_t b_last_minigop_bframe; /* this frame is the last b in a sequence of bframes */
     uint8_t i_bframes;   /* number of bframes following this nonb in coded order */
     float   f_qp_avg_rc; /* QPs as decided by ratecontrol */
     float   f_qp_avg_aq; /* QPs as decided by AQ in addition to ratecontrol */
+    int     i_poc_l0ref0; /* poc of first refframe in L0, used to check if direct temporal is possible */
 
     /* YUV buffer */
     int     i_plane;
@@ -76,6 +85,7 @@ typedef struct x264_frame
 
     /* motion data */
     int8_t  *mb_type;
+    uint8_t *mb_partition;
     int16_t (*mv[2])[2];
     int16_t (*lowres_mvs[2][X264_BFRAME_MAX+1])[2];
     uint16_t (*lowres_costs[X264_BFRAME_MAX+2][X264_BFRAME_MAX+2]);
@@ -85,7 +95,7 @@ typedef struct x264_frame
     int8_t  *ref[2];
     int     i_ref[2];
     int     ref_poc[2][16];
-    int     inv_ref_poc[16]; // inverse values (list0 only) to avoid divisions in MB encoding
+    int16_t inv_ref_poc[2][32]; // inverse values (list0 only) to avoid divisions in MB encoding
 
     /* for adaptive B-frame decision.
      * contains the SATD cost of the lowres frame encoded in various modes
@@ -109,9 +119,15 @@ typedef struct x264_frame
     uint32_t i_pixel_sum;
     uint64_t i_pixel_ssd;
 
+    /* hrd */
+    x264_hrd_t hrd_timing;
+
     /* vbv */
     uint8_t i_planned_type[X264_LOOKAHEAD_MAX+1];
     int i_planned_satd[X264_LOOKAHEAD_MAX+1];
+    double f_planned_cpb_duration[X264_LOOKAHEAD_MAX+1];
+    int i_coded_fields_lookahead;
+    int i_cpb_delay_lookahead;
 
     /* threading */
     int     i_lines_completed; /* in pixels */
@@ -119,6 +135,11 @@ typedef struct x264_frame
     int     i_reference_count; /* number of threads using this frame (not necessarily the number of pointers) */
     x264_pthread_mutex_t mutex;
     x264_pthread_cond_t  cv;
+
+    /* periodic intra refresh */
+    float   f_pir_position;
+    int     i_pir_start_col;
+    int     i_pir_end_col;
 
     void    (*delete)( struct x264_frame *frame ); /* to free GPU resources */
 #ifdef HAVE_OPENCL

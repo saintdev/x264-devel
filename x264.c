@@ -5,6 +5,8 @@
  *
  * Authors: Loren Merritt <lorenm@u.washington.edu>
  *          Laurent Aimar <fenrir@via.ecp.fr>
+ *          Steven Walters <kemuri9@gmail.com>
+ *          Kieran Kunhya <kieran@kunhya.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -55,20 +57,89 @@ typedef struct {
     hnd_t hin;
     hnd_t hout;
     FILE *qpfile;
+    FILE *tcfile_out;
+    double timebase_convert_multiplier;
+    int i_pulldown;
 } cli_opt_t;
 
 /* i/o file operation function pointer structs */
 cli_input_t input;
 static cli_output_t output;
 
-/* i/o modules that work with pipes (and fifos) */
-static const char * const stdin_format_names[] = { "yuv", "y4m", 0 };
-static const char * const stdout_format_names[] = { "raw", "mkv", "flv", 0 };
+static const char * const demuxer_names[] =
+{
+    "auto",
+    "yuv",
+    "y4m",
+#ifdef AVS_INPUT
+    "avs",
+#endif
+#ifdef LAVF_INPUT
+    "lavf",
+#endif
+#ifdef FFMS_INPUT
+    "ffms",
+#endif
+    0
+};
+
+static const char * const muxer_names[] =
+{
+    "auto",
+    "raw",
+    "mkv",
+    "flv",
+#ifdef MP4_OUTPUT
+    "mp4",
+#endif
+    0
+};
+
+static const char * const pulldown_names[] = { "none", "22", "32", "64", "double", "triple", "euro", 0 };
+
+typedef struct{
+    int mod;
+    uint8_t pattern[24];
+    float fps_factor;
+} cli_pulldown_t;
+
+enum pulldown_type_e
+{
+    X264_PULLDOWN_22 = 1,
+    X264_PULLDOWN_32,
+    X264_PULLDOWN_64,
+    X264_PULLDOWN_DOUBLE,
+    X264_PULLDOWN_TRIPLE,
+    X264_PULLDOWN_EURO
+};
+
+#define TB  PIC_STRUCT_TOP_BOTTOM
+#define BT  PIC_STRUCT_BOTTOM_TOP
+#define TBT PIC_STRUCT_TOP_BOTTOM_TOP
+#define BTB PIC_STRUCT_BOTTOM_TOP_BOTTOM
+
+static const cli_pulldown_t pulldown_values[] =
+{
+    [X264_PULLDOWN_22]     = {1,  {TB},                                   2.0},
+    [X264_PULLDOWN_32]     = {4,  {TBT, BT, BTB, TB},                     1.25},
+    [X264_PULLDOWN_64]     = {2,  {PIC_STRUCT_DOUBLE, PIC_STRUCT_TRIPLE}, 1.0},
+    [X264_PULLDOWN_DOUBLE] = {1,  {PIC_STRUCT_DOUBLE},                    2.0},
+    [X264_PULLDOWN_TRIPLE] = {1,  {PIC_STRUCT_TRIPLE},                    3.0},
+    [X264_PULLDOWN_EURO]   = {24, {TBT, BT, BT, BT, BT, BT, BT, BT, BT, BT, BT, BT,
+                                   BTB, TB, TB, TB, TB, TB, TB, TB, TB, TB, TB, TB}, 25.0/24.0}
+};
+
+#undef TB
+#undef BT
+#undef TBT
+#undef BTB
+
+// indexed by pic_struct enum
+static const float pulldown_frame_duration[10] = { 0.0, 1, 0.5, 0.5, 1, 1, 1.5, 1.5, 2, 3 };
 
 static void Help( x264_param_t *defaults, int longhelp );
 static int  Parse( int argc, char **argv, x264_param_t *param, cli_opt_t *opt );
 static int  Encode( x264_param_t *param, cli_opt_t *opt );
-
 
 /****************************************************************************
  * main:
@@ -88,8 +159,6 @@ int main( int argc, char **argv )
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
-
-    x264_param_default( &param );
 
     /* Parse command line */
     if( Parse( argc, argv, &param, &opt ) < 0 )
@@ -114,11 +183,25 @@ static char const *strtable_lookup( const char * const table[], int index )
     return ( ( index >= 0 && index < i ) ? table[ index ] : "???" );
 }
 
+static char *stringify_names( char *buf, const char * const names[] )
+{
+    int i = 0;
+    char *p = buf;
+    for( p[0] = 0; names[i]; i++ )
+    {
+        p += sprintf( p, "%s", names[i] );
+        if( names[i+1] )
+            p += sprintf( p, ", " );
+    }
+    return buf;
+}
+
 /*****************************************************************************
  * Help:
  *****************************************************************************/
 static void Help( x264_param_t *defaults, int longhelp )
 {
+    char buf[50];
 #define H0 printf
 #define H1 if(longhelp>=1) printf
 #define H2 if(longhelp==2) printf
@@ -128,6 +211,7 @@ static void Help( x264_param_t *defaults, int longhelp )
         "Infile can be raw YUV 4:2:0 (in which case resolution is required),\n"
         "  or YUV4MPEG 4:2:0 (*.y4m),\n"
         "  or Avisynth if compiled with support (%s).\n"
+        "  or libav* formats if compiled with lavf support (%s) or ffms support (%s).\n"
         "Outfile type is selected by filename:\n"
         " .264 -> Raw bytestream\n"
         " .mkv -> Matroska\n"
@@ -142,9 +226,17 @@ static void Help( x264_param_t *defaults, int longhelp )
         "\n",
         X264_BUILD, X264_VERSION,
 #ifdef AVS_INPUT
-        "native",
-#elif defined(VFW_INPUT)
-        "vfw (fallback)",
+        "yes",
+#else
+        "no",
+#endif
+#ifdef LAVF_INPUT
+        "yes",
+#else
+        "no",
+#endif
+#ifdef FFMS_INPUT
+        "yes",
 #else
         "no",
 #endif
@@ -174,19 +266,21 @@ static void Help( x264_param_t *defaults, int longhelp )
     H0( "\n" );
     H0( "Presets:\n" );
     H0( "\n" );
-    H0( "      --profile               Force H.264 profile [high]\n" );
-    H0( "                                  Overrides all settings\n" );
+    H0( "      --profile               Force the limits of an H.264 profile [high]\n"
+        "                                  Overrides all settings.\n" );
     H2( "                                  - baseline:\n"
         "                                    --no-8x8dct --bframes 0 --no-cabac\n"
-        "                                    --cqm flat --weightp 0 No interlaced\n"
-        "                                    No lossless\n"
+        "                                    --cqm flat --weightp 0\n"
+        "                                    No interlaced.\n"
+        "                                    No lossless.\n"
         "                                  - main:\n"
-        "                                    --no-8x8dct --cqm flat No lossless\n"
+        "                                    --no-8x8dct --cqm flat\n"
+        "                                    No lossless.\n"
         "                                  - high:\n"
-        "                                    No lossless\n" );
+        "                                    No lossless.\n" );
         else H0( "                                  - baseline,main,high\n" );
-    H0( "      --preset                Use a preset to select encoding settings [medium]\n" );
-    H0( "                                  Overridden by user settings\n" );
+    H0( "      --preset                Use a preset to select encoding settings [medium]\n"
+        "                                  Overridden by user settings.\n" );
     H2( "                                  - ultrafast:\n"
         "                                    --no-8x8dct --aq-mode 0 --b-adapt 0\n"
         "                                    --bframes 0 --no-cabac --no-deblock\n"
@@ -194,78 +288,88 @@ static void Help( x264_param_t *defaults, int longhelp )
         "                                    --partitions none --ref 1 --scenecut 0\n"
         "                                    --subme 0 --trellis 0 --no-weightb\n"
         "                                    --weightp 0\n"
-        "                                  - veryfast:\n"
+        "                                  - superfast:\n"
         "                                    --no-mbtree --me dia --no-mixed-refs\n"
         "                                    --partitions i8x8,i4x4 --ref 1\n"
         "                                    --subme 1 --trellis 0 --weightp 0\n"
+        "                                  - veryfast:\n"
+        "                                    --no-mbtree --no-mixed-refs --ref 1\n"
+        "                                    --subme 2 --trellis 0 --weightp 0\n"
         "                                  - faster:\n"
-        "                                    --no-mbtree --no-mixed-refs --refs 2\n"
-        "                                    --subme 4 --weightp 1\n"
-        "                                  - fast\n"
+        "                                    --no-mixed-refs --rc-lookahead 20\n"
+        "                                    --ref 2 --subme 4 --weightp 1\n"
+        "                                  - fast:\n"
         "                                    --rc-lookahead 30 --ref 2 --subme 6\n"
-        "                                  - medium\n"
+        "                                  - medium:\n"
         "                                    Default settings apply.\n"
-        "                                  - slow\n"
+        "                                  - slow:\n"
         "                                    --b-adapt 2 --direct auto --me umh\n"
         "                                    --rc-lookahead 50 --ref 5 --subme 8\n"
-        "                                  - slower\n"
+        "                                  - slower:\n"
         "                                    --b-adapt 2 --direct auto --me umh\n"
         "                                    --partitions all --rc-lookahead 60\n"
         "                                    --ref 8 --subme 9 --trellis 2\n"
-        "                                  - veryslow\n"
+        "                                  - veryslow:\n"
         "                                    --b-adapt 2 --bframes 8 --direct auto\n"
-        "                                    --me umh --me-range 24 --partitions all\n"
+        "                                    --me umh --merange 24 --partitions all\n"
         "                                    --ref 16 --subme 10 --trellis 2\n"
         "                                    --rc-lookahead 60\n"
-        "                                  - placebo\n"
+        "                                  - placebo:\n"
         "                                    --bframes 16 --b-adapt 2 --direct auto\n"
         "                                    --slow-firstpass --no-fast-pskip\n"
-        "                                    --me tesa --me-range 24 --partitions all\n"
+        "                                    --me tesa --merange 24 --partitions all\n"
         "                                    --rc-lookahead 60 --ref 16 --subme 10\n"
         "                                    --trellis 2\n" );
-    else H0( "                                  - ultrafast,veryfast,faster,fast,medium\n"
-             "                                  - slow,slower,veryslow,placebo\n" );
-    H0( "      --tune                  Tune the settings for a particular type of source\n" );
-    H0( "                                  Overridden by user settings\n" );
-    H2( "                                  - film:\n"
+    else H0( "                                  - ultrafast,superfast,veryfast,faster,fast\n"
+             "                                  - medium,slow,slower,veryslow,placebo\n" );
+    H0( "      --tune                  Tune the settings for a particular type of source\n"
+        "                              or situation\n"
+        "                                  Overridden by user settings.\n"
+        "                                  Multiple tunings are separated by commas.\n"
+        "                                  Only one psy tuning can be used at a time.\n" );
+    H2( "                                  - film (psy tuning):\n"
         "                                    --deblock -1:-1 --psy-rd <unset>:0.15\n"
-        "                                  - animation:\n"
+        "                                  - animation (psy tuning):\n"
         "                                    --bframes {+2} --deblock 1:1\n"
         "                                    --psy-rd 0.4:<unset> --aq-strength 0.6\n"
         "                                    --ref {Double if >1 else 1}\n"
-        "                                  - grain:\n"
+        "                                  - grain (psy tuning):\n"
         "                                    --aq-strength 0.5 --no-dct-decimate\n"
         "                                    --deadzone-inter 6 --deadzone-intra 6\n"
         "                                    --deblock -2:-2 --ipratio 1.1 \n"
         "                                    --pbratio 1.1 --psy-rd <unset>:0.25\n"
         "                                    --qcomp 0.8\n"
-        "                                  - psnr:\n"
+        "                                  - stillimage (psy tuning):\n"
+        "                                    --aq-strength 1.2 --deblock -3:-3\n"
+        "                                    --psy-rd 2.0:0.7\n"
+        "                                  - psnr (psy tuning):\n"
         "                                    --aq-mode 0 --no-psy\n"
-        "                                  - ssim:\n"
+        "                                  - ssim (psy tuning):\n"
         "                                    --aq-mode 2 --no-psy\n"
         "                                  - fastdecode:\n"
         "                                    --no-cabac --no-deblock --no-weightb\n"
         "                                    --weightp 0\n"
         "                                  - zerolatency:\n"
-        "                                    --bframes 0 --rc-lookahead 0\n"
-        "                                    --sync-lookahead 0 --sliced-threads\n"
-        "                                  - touhou:\n"
-        "                                    --aq-strength 1.3 --deblock -1:-1\n"
-        "                                    --partitions {p4x4 if p8x8 set}\n"
-        "                                    --psy-rd <unset>:0.2\n"
-        "                                    --ref {Double if >1 else 1}\n" );
-    else H0( "                                  - film,animation,grain,psnr,ssim\n"
-             "                                  - fastdecode,zerolatency\n" );
-    H1( "      --slow-firstpass        Don't use faster settings with --pass 1\n" );
+        "                                    --bframes 0 --force-cfr --rc-lookahead 0\n"
+        "                                    --sync-lookahead 0 --sliced-threads\n" );
+    else H0( "                                  - psy tunings: film,animation,grain,\n"
+             "                                                 stillimage,psnr,ssim\n"
+             "                                  - other tunings: fastdecode,zerolatency\n" );
+    H2( "      --slow-firstpass        Don't force these faster settings with --pass 1:\n"
+        "                                  --no-8x8dct --me dia --partitions none\n"
+        "                                  --ref 1 --subme {2 if >2 else unchanged}\n"
+        "                                  --trellis 0 --fast-pskip\n" );
+    else H1( "      --slow-firstpass        Don't force faster settings with --pass 1\n" );
     H0( "\n" );
     H0( "Frame-type options:\n" );
     H0( "\n" );
     H0( "  -I, --keyint <integer>      Maximum GOP size [%d]\n", defaults->i_keyint_max );
-    H2( "  -i, --min-keyint <integer>  Minimum GOP size [%d]\n", defaults->i_keyint_min );
+    H2( "  -i, --min-keyint <integer>  Minimum GOP size [auto]\n" );
     H2( "      --no-scenecut           Disable adaptive I-frame decision\n" );
     H2( "      --scenecut <integer>    How aggressively to insert extra I-frames [%d]\n", defaults->i_scenecut_threshold );
+    H2( "      --intra-refresh         Use Periodic Intra Refresh instead of IDR frames\n" );
     H1( "  -b, --bframes <integer>     Number of B-frames between I and P [%d]\n", defaults->i_bframe );
-    H1( "      --b-adapt               Adaptive B-frame decision method [%d]\n"
+    H1( "      --b-adapt <integer>     Adaptive B-frame decision method [%d]\n"
         "                                  Higher values may lower threading efficiency.\n"
         "                                  - 0: Disabled\n"
         "                                  - 1: Fast\n"
@@ -286,7 +390,8 @@ static void Help( x264_param_t *defaults, int longhelp )
     else H1( "      --slices <integer>      Number of slices per frame\n" );
     H2( "      --slice-max-size <integer> Limit the size of each slice in bytes\n");
     H2( "      --slice-max-mbs <integer> Limit the size of each slice in macroblocks\n");
-    H0( "      --interlaced            Enable pure-interlaced mode\n" );
+    H0( "      --tff                   Enable interlaced mode (top field first)\n" );
+    H0( "      --bff                   Enable interlaced mode (bottom field first)\n" );
     H2( "      --constrained-intra     Enable constrained intra prediction.\n" );
     H0( "\n" );
     H0( "Ratecontrol:\n" );
@@ -298,6 +403,8 @@ static void Help( x264_param_t *defaults, int longhelp )
     H0( "      --vbv-maxrate <integer> Max local bitrate (kbit/s) [%d]\n", defaults->rc.i_vbv_max_bitrate );
     H0( "      --vbv-bufsize <integer> Set size of the VBV buffer (kbit) [%d]\n", defaults->rc.i_vbv_buffer_size );
     H2( "      --vbv-init <float>      Initial VBV buffer occupancy [%.1f]\n", defaults->rc.f_vbv_buffer_init );
+    H2( "      --crf-max <float>       With CRF+VBV, limit RF to this value\n"
+        "                                  May cause VBV underflows!\n" );
     H2( "      --qpmin <integer>       Set min QP [%d]\n", defaults->rc.i_qp_min );
     H2( "      --qpmax <integer>       Set max QP [%d]\n", defaults->rc.i_qp_max );
     H2( "      --qpstep <integer>      Set max QP step [%d]\n", defaults->rc.i_qp_step );
@@ -312,9 +419,8 @@ static void Help( x264_param_t *defaults, int longhelp )
     H1( "      --aq-strength <float>   Reduces blocking and blurring in flat and\n"
         "                              textured areas. [%.1f]\n", defaults->rc.f_aq_strength );
     H1( "\n" );
-    H2( "  -p, --pass <1|2|3>          Enable multipass ratecontrol\n" );
-    else H0( "  -p, --pass <1|2>            Enable multipass ratecontrol\n" );
-    H0( "                                  - 1: First pass, creates stats file\n"
+    H0( "  -p, --pass <integer>        Enable multipass ratecontrol\n"
+        "                                  - 1: First pass, creates stats file\n"
         "                                  - 2: Last pass, does not overwrite stats file\n" );
     H2( "                                  - 3: Nth pass, overwrites stats file\n" );
     H1( "      --stats <string>        Filename for 2 pass stats [\"%s\"]\n", defaults->rc.psz_stat_out );
@@ -343,10 +449,10 @@ static void Help( x264_param_t *defaults, int longhelp )
         "                                  - none, spatial, temporal, auto\n",
                                        strtable_lookup( x264_direct_pred_names, defaults->analyse.i_direct_mv_pred ) );
     H2( "      --no-weightb            Disable weighted prediction for B-frames\n" );
-    H1( "      --weightp               Weighted prediction for P-frames [%d]\n"
-        "                              - 0: Disabled\n"
-        "                              - 1: Blind offset\n"
-        "                              - 2: Smart analysis\n", defaults->analyse.i_weighted_pred );
+    H1( "      --weightp <integer>     Weighted prediction for P-frames [%d]\n"
+        "                                  - 0: Disabled\n"
+        "                                  - 1: Blind offset\n"
+        "                                  - 2: Smart analysis\n", defaults->analyse.i_weighted_pred );
     H1( "      --me <string>           Integer pixel motion estimation method [\"%s\"]\n",
                                        strtable_lookup( x264_motion_est_names, defaults->analyse.i_me_method ) );
     H2( "                                  - dia: diamond search, radius 1 (fast)\n"
@@ -429,14 +535,20 @@ static void Help( x264_param_t *defaults, int longhelp )
                                        strtable_lookup( x264_colmatrix_names, defaults->vui.i_colmatrix ) );
     H2( "      --chromaloc <integer>   Specify chroma sample location (0 to 5) [%d]\n",
                                        defaults->vui.i_chroma_loc );
+
+    H2( "      --nal-hrd <string>      Signal HRD information (requires vbv-bufsize)\n"
+        "                                  - none, vbr, cbr (cbr not allowed in .mp4)\n" );
+    H2( "      --pic-struct            Force pic_struct in Picture Timing SEI\n" );
+
     H0( "\n" );
     H0( "Input/Output:\n" );
     H0( "\n" );
     H0( "  -o, --output                Specify output file\n" );
-    H1( "      --stdout                Specify stdout format [\"%s\"]\n"
-        "                                  - raw, mkv, flv\n", stdout_format_names[0] );
-    H1( "      --stdin                 Specify stdin format [\"%s\"]\n"
-        "                                  - yuv, y4m\n", stdin_format_names[0] );
+    H1( "      --muxer <string>        Specify output container format [\"%s\"]\n"
+        "                                  - %s\n", muxer_names[0], stringify_names( buf, muxer_names ) );
+    H1( "      --demuxer <string>      Specify input container format [\"%s\"]\n"
+        "                                  - %s\n", demuxer_names[0], stringify_names( buf, demuxer_names ) );
+    H1( "      --index <string>        Filename for input index file\n" );
     H0( "      --sar width:height      Specify Sample Aspect Ratio\n" );
     H0( "      --fps <float|rational>  Specify framerate\n" );
     H0( "      --seek <integer>        First frame to encode\n" );
@@ -460,6 +572,14 @@ static void Help( x264_param_t *defaults, int longhelp )
     H2( "      --dump-yuv <string>     Save reconstructed frames\n" );
     H2( "      --sps-id <integer>      Set SPS and PPS id numbers [%d]\n", defaults->i_sps_id );
     H2( "      --aud                   Use access unit delimiters\n" );
+    H2( "      --force-cfr             Force constant framerate timestamp generation\n" );
+    H2( "      --tcfile-in <string>    Force timestamp generation with timecode file\n" );
+    H2( "      --tcfile-out <string>   Output timecode v2 file from input timestamps\n" );
+    H2( "      --timebase <int/int>    Specify timebase numerator and denominator\n"
+        "                 <integer>    Specify timebase numerator for input timecode file\n"
+        "                              or specify timebase denominator for other input\n" );
+    H0( "      --pulldown <string>     Use soft pulldown to change frame rate\n"
+        "                                  - none, 22, 32, 64, double, triple, euro (requires cfr input)\n" );
     H0( "\n" );
 }
 
@@ -477,8 +597,14 @@ static void Help( x264_param_t *defaults, int longhelp )
 #define OPT_SLOWFIRSTPASS 267
 #define OPT_FULLHELP 268
 #define OPT_FPS 269
-#define OPT_STDOUT_FORMAT 270
-#define OPT_STDIN_FORMAT 271
+#define OPT_MUXER 270
+#define OPT_DEMUXER 271
+#define OPT_INDEX 272
+#define OPT_INTERLACED 273
+#define OPT_TCFILE_IN 274
+#define OPT_TCFILE_OUT 275
+#define OPT_TIMEBASE 276
+#define OPT_PULLDOWN 277
 
 static char short_options[] = "8A:B:b:f:hI:i:m:o:p:q:r:t:Vvw";
 static struct option long_options[] =
@@ -499,13 +625,17 @@ static struct option long_options[] =
     { "b-pyramid",   required_argument, NULL, 0 },
     { "min-keyint",  required_argument, NULL, 'i' },
     { "keyint",      required_argument, NULL, 'I' },
+    { "intra-refresh",     no_argument, NULL, 0 },
     { "scenecut",    required_argument, NULL, 0 },
     { "no-scenecut",       no_argument, NULL, 0 },
     { "nf",                no_argument, NULL, 0 },
     { "no-deblock",        no_argument, NULL, 0 },
     { "filter",      required_argument, NULL, 0 },
     { "deblock",     required_argument, NULL, 'f' },
-    { "interlaced",        no_argument, NULL, 0 },
+    { "interlaced",        no_argument, NULL, OPT_INTERLACED },
+    { "tff",               no_argument, NULL, OPT_INTERLACED },
+    { "bff",               no_argument, NULL, OPT_INTERLACED },
+    { "no-interlaced",     no_argument, NULL, OPT_INTERLACED },
     { "constrained-intra", no_argument, NULL, 0 },
     { "cabac",             no_argument, NULL, 0 },
     { "no-cabac",          no_argument, NULL, 0 },
@@ -525,8 +655,11 @@ static struct option long_options[] =
     { "frames",      required_argument, NULL, OPT_FRAMES },
     { "seek",        required_argument, NULL, OPT_SEEK },
     { "output",      required_argument, NULL, 'o' },
-    { "stdout",      required_argument, NULL, OPT_STDOUT_FORMAT },
-    { "stdin",       required_argument, NULL, OPT_STDIN_FORMAT },
+    { "muxer",       required_argument, NULL, OPT_MUXER },
+    { "demuxer",     required_argument, NULL, OPT_DEMUXER },
+    { "stdout",      required_argument, NULL, OPT_MUXER },
+    { "stdin",       required_argument, NULL, OPT_DEMUXER },
+    { "index",       required_argument, NULL, OPT_INDEX },
     { "analyse",     required_argument, NULL, 0 },
     { "partitions",  required_argument, NULL, 'A' },
     { "direct",      required_argument, NULL, 0 },
@@ -558,7 +691,8 @@ static struct option long_options[] =
     { "ratetol",     required_argument, NULL, 0 },
     { "vbv-maxrate", required_argument, NULL, 0 },
     { "vbv-bufsize", required_argument, NULL, 0 },
-    { "vbv-init",    required_argument, NULL,  0 },
+    { "vbv-init",    required_argument, NULL, 0 },
+    { "crf-max",     required_argument, NULL, 0 },
     { "ipratio",     required_argument, NULL, 0 },
     { "pbratio",     required_argument, NULL, 0 },
     { "chroma-qp-offset", required_argument, NULL, 0 },
@@ -609,115 +743,185 @@ static struct option long_options[] =
     { "transfer",    required_argument, NULL, 0 },
     { "colormatrix", required_argument, NULL, 0 },
     { "chromaloc",   required_argument, NULL, 0 },
+    { "force-cfr",         no_argument, NULL, 0 },
+    { "tcfile-in",   required_argument, NULL, OPT_TCFILE_IN },
+    { "tcfile-out",  required_argument, NULL, OPT_TCFILE_OUT },
+    { "timebase",    required_argument, NULL, OPT_TIMEBASE },
+    { "pic-struct",        no_argument, NULL, 0 },
+    { "nal-hrd",     required_argument, NULL, 0 },
+    { "pulldown",    required_argument, NULL, OPT_PULLDOWN },
     {0, 0, 0, 0}
 };
 
-static int select_output( char *filename, const char *pipe_format, x264_param_t *param )
+static int select_output( const char *muxer, char *filename, x264_param_t *param )
 {
     const char *ext = get_filename_extension( filename );
-    if( !strcmp( filename, "-" ) )
-        ext = pipe_format;
+    if( !strcmp( filename, "-" ) || strcasecmp( muxer, "auto" ) )
+        ext = muxer;
 
     if( !strcasecmp( ext, "mp4" ) )
     {
 #ifdef MP4_OUTPUT
-        output = mp4_output; // FIXME use b_annexb=0
+        output = mp4_output;
+        param->b_annexb = 0;
+        param->b_dts_compress = 0;
+        param->b_repeat_headers = 0;
+        if( param->i_nal_hrd == X264_NAL_HRD_CBR )
+        {
+            fprintf( stderr, "x264 [warning]: cbr nal-hrd is not compatible with mp4\n" );
+            param->i_nal_hrd = X264_NAL_HRD_VBR;
+        }
 #else
         fprintf( stderr, "x264 [error]: not compiled with MP4 output support\n" );
         return -1;
 #endif
     }
     else if( !strcasecmp( ext, "mkv" ) )
-        output = mkv_output; // FIXME use b_annexb=0
+    {
+        output = mkv_output;
+        param->b_annexb = 0;
+        param->b_dts_compress = 0;
+        param->b_repeat_headers = 0;
+    }
     else if( !strcasecmp( ext, "flv" ) )
     {
         output = flv_output;
         param->b_annexb = 0;
+        param->b_dts_compress = 1;
+        param->b_repeat_headers = 0;
     }
     else
         output = raw_output;
     return 0;
 }
 
-static int select_input( char *filename, char *resolution, const char *pipe_format, x264_param_t *param )
+static int select_input( const char *demuxer, char *used_demuxer, char *filename,
+                         hnd_t *p_handle, video_info_t *info, cli_input_opt_t *opt )
 {
     const char *ext = get_filename_extension( filename );
-    if( !strcmp( filename, "-" ) )
-        ext = pipe_format;
-
-    if( !strcasecmp( ext, "avi" ) || !strcasecmp( ext, "avs" ) )
+    int b_regular = strcmp( filename, "-" );
+    int b_auto = !strcasecmp( demuxer, "auto" );
+    if( !b_regular && b_auto )
+        ext = "yuv";
+    if( b_regular )
     {
-#if defined(AVS_INPUT) || defined(VFW_INPUT)
+        FILE *f = fopen( filename, "r" );
+        if( f )
+        {
+            b_regular = x264_is_regular_file( f );
+            fclose( f );
+        }
+    }
+    const char *module = b_auto ? ext : demuxer;
+
+    if( !strcasecmp( module, "avs" ) || !strcasecmp( ext, "d2v" ) || !strcasecmp( ext, "dga" ) )
+    {
+#ifdef AVS_INPUT
         input = avs_input;
+        module = "avs";
 #else
         fprintf( stderr, "x264 [error]: not compiled with AVS input support\n" );
         return -1;
 #endif
     }
-    else if( !strcasecmp( ext, "y4m" ) )
+    else if( !strcasecmp( module, "y4m" ) )
         input = y4m_input;
-    else if( !strcasecmp( ext, "yuv" ) )
-    {
-        if( !resolution )
-        {
-            /* try to parse the file name */
-            char *p;
-            for( p = filename; *p; p++ )
-                if( *p >= '0' && *p <= '9' &&
-                    sscanf( p, "%ux%u", &param->i_width, &param->i_height ) == 2 )
-                {
-                    if( param->i_log_level >= X264_LOG_INFO )
-                        fprintf( stderr, "x264 [info]: %dx%d (given by file name) @ %.2f fps\n", param->i_width,
-                                 param->i_height, (double)param->i_fps_num / param->i_fps_den );
-                    break;
-                }
-        }
-        else
-        {
-            sscanf( resolution, "%ux%u", &param->i_width, &param->i_height );
-            if( param->i_log_level >= X264_LOG_INFO )
-                fprintf( stderr, "x264 [info]: %dx%d @ %.2f fps\n", param->i_width, param->i_height,
-                         (double)param->i_fps_num / param->i_fps_den );
-        }
-        if( !param->i_width || !param->i_height )
-        {
-            fprintf( stderr, "x264 [error]: Rawyuv input requires a resolution.\n" );
-            return -1;
-        }
+    else if( !strcasecmp( module, "yuv" ) )
         input = yuv_input;
-    }
     else
     {
-#ifdef AVS_INPUT
-        input = avs_input;
-#else
-        input = yuv_input;
+#ifdef FFMS_INPUT
+        if( b_regular && (b_auto || !strcasecmp( demuxer, "ffms" )) &&
+            !ffms_input.open_file( filename, p_handle, info, opt ) )
+        {
+            module = "ffms";
+            b_auto = 0;
+            input = ffms_input;
+        }
 #endif
+#ifdef LAVF_INPUT
+        if( (b_auto || !strcasecmp( demuxer, "lavf" )) &&
+            !lavf_input.open_file( filename, p_handle, info, opt ) )
+        {
+            module = "lavf";
+            b_auto = 0;
+            input = lavf_input;
+        }
+#endif
+#ifdef AVS_INPUT
+        if( b_regular && (b_auto || !strcasecmp( demuxer, "avs" )) &&
+            !avs_input.open_file( filename, p_handle, info, opt ) )
+        {
+            module = "avs";
+            b_auto = 0;
+            input = avs_input;
+        }
+#endif
+        if( b_auto && !yuv_input.open_file( filename, p_handle, info, opt ) )
+        {
+            module = "yuv";
+            b_auto = 0;
+            input = yuv_input;
+        }
+
+        if( !(*p_handle) )
+        {
+            fprintf( stderr, "x264 [error]: could not open input file `%s' via any method!\n", filename );
+            return -1;
+        }
     }
+    strcpy( used_demuxer, module );
 
     return 0;
+}
+
+static int parse_enum_name( const char *arg, const char * const *names, const char **dst )
+{
+    for( int i = 0; names[i]; i++ )
+        if( !strcasecmp( arg, names[i] ) )
+        {
+            *dst = names[i];
+            return 0;
+        }
+    return -1;
+}
+
+static int parse_enum_value( const char *arg, const char * const *names, int *dst )
+{
+    for( int i = 0; names[i]; i++ )
+        if( !strcasecmp( arg, names[i] ) )
+        {
+            *dst = i;
+            return 0;
+        }
+    return -1;
 }
 
 /*****************************************************************************
  * Parse:
  *****************************************************************************/
-static int  Parse( int argc, char **argv,
-                   x264_param_t *param, cli_opt_t *opt )
+static int Parse( int argc, char **argv, x264_param_t *param, cli_opt_t *opt )
 {
     char *input_filename = NULL;
-    const char *stdin_format = stdin_format_names[0];
+    const char *demuxer = demuxer_names[0];
     char *output_filename = NULL;
-    const char *stdout_format = stdout_format_names[0];
-    x264_param_t defaults = *param;
+    const char *muxer = muxer_names[0];
+    char *tcfile_name = NULL;
+    x264_param_t defaults;
     char *profile = NULL;
     int b_thread_input = 0;
     int b_turbo = 1;
-    int b_pass1 = 0;
     int b_user_ref = 0;
     int b_user_fps = 0;
-    int i;
+    int b_user_interlaced = 0;
+    cli_input_opt_t input_opt;
+    char *preset = NULL;
+    char *tune = NULL;
+
+    x264_param_default( &defaults );
 
     memset( opt, 0, sizeof(cli_opt_t) );
+    memset( &input_opt, 0, sizeof(cli_input_opt_t) );
     opt->b_progress = 1;
 
     /* Presets are applied before all other options. */
@@ -726,195 +930,19 @@ static int  Parse( int argc, char **argv,
         int c = getopt_long( argc, argv, short_options, long_options, NULL );
         if( c == -1 )
             break;
-
         if( c == OPT_PRESET )
-        {
-            if( !strcasecmp( optarg, "ultrafast" ) )
-            {
-                param->i_frame_reference = 1;
-                param->i_scenecut_threshold = 0;
-                param->b_deblocking_filter = 0;
-                param->b_cabac = 0;
-                param->i_bframe = 0;
-                param->analyse.intra = 0;
-                param->analyse.inter = 0;
-                param->analyse.b_transform_8x8 = 0;
-                param->analyse.i_me_method = X264_ME_DIA;
-                param->analyse.i_subpel_refine = 0;
-                param->rc.i_aq_mode = 0;
-                param->analyse.b_mixed_references = 0;
-                param->analyse.i_trellis = 0;
-                param->i_bframe_adaptive = X264_B_ADAPT_NONE;
-                param->rc.b_mb_tree = 0;
-                param->analyse.i_weighted_pred = X264_WEIGHTP_NONE;
-            }
-            else if( !strcasecmp( optarg, "veryfast" ) )
-            {
-                param->analyse.inter = X264_ANALYSE_I8x8|X264_ANALYSE_I4x4;
-                param->analyse.i_me_method = X264_ME_DIA;
-                param->analyse.i_subpel_refine = 1;
-                param->i_frame_reference = 1;
-                param->analyse.b_mixed_references = 0;
-                param->analyse.i_trellis = 0;
-                param->rc.b_mb_tree = 0;
-                param->analyse.i_weighted_pred = X264_WEIGHTP_NONE;
-            }
-            else if( !strcasecmp( optarg, "faster" ) )
-            {
-                param->analyse.b_mixed_references = 0;
-                param->i_frame_reference = 2;
-                param->analyse.i_subpel_refine = 4;
-                param->rc.b_mb_tree = 0;
-                param->analyse.i_weighted_pred = X264_WEIGHTP_BLIND;
-            }
-            else if( !strcasecmp( optarg, "fast" ) )
-            {
-                param->i_frame_reference = 2;
-                param->analyse.i_subpel_refine = 6;
-                param->rc.i_lookahead = 30;
-            }
-            else if( !strcasecmp( optarg, "medium" ) )
-            {
-                /* Default is medium */
-            }
-            else if( !strcasecmp( optarg, "slow" ) )
-            {
-                param->analyse.i_me_method = X264_ME_UMH;
-                param->analyse.i_subpel_refine = 8;
-                param->i_frame_reference = 5;
-                param->i_bframe_adaptive = X264_B_ADAPT_TRELLIS;
-                param->analyse.i_direct_mv_pred = X264_DIRECT_PRED_AUTO;
-                param->rc.i_lookahead = 50;
-            }
-            else if( !strcasecmp( optarg, "slower" ) )
-            {
-                param->analyse.i_me_method = X264_ME_UMH;
-                param->analyse.i_subpel_refine = 9;
-                param->i_frame_reference = 8;
-                param->i_bframe_adaptive = X264_B_ADAPT_TRELLIS;
-                param->analyse.i_direct_mv_pred = X264_DIRECT_PRED_AUTO;
-                param->analyse.inter |= X264_ANALYSE_PSUB8x8;
-                param->analyse.i_trellis = 2;
-                param->rc.i_lookahead = 60;
-            }
-            else if( !strcasecmp( optarg, "veryslow" ) )
-            {
-                param->analyse.i_me_method = X264_ME_UMH;
-                param->analyse.i_subpel_refine = 10;
-                param->analyse.i_me_range = 24;
-                param->i_frame_reference = 16;
-                param->i_bframe_adaptive = X264_B_ADAPT_TRELLIS;
-                param->analyse.i_direct_mv_pred = X264_DIRECT_PRED_AUTO;
-                param->analyse.inter |= X264_ANALYSE_PSUB8x8;
-                param->analyse.i_trellis = 2;
-                param->i_bframe = 8;
-                param->rc.i_lookahead = 60;
-            }
-            else if( !strcasecmp( optarg, "placebo" ) )
-            {
-                param->analyse.i_me_method = X264_ME_TESA;
-                param->analyse.i_subpel_refine = 10;
-                param->analyse.i_me_range = 24;
-                param->i_frame_reference = 16;
-                param->i_bframe_adaptive = X264_B_ADAPT_TRELLIS;
-                param->analyse.i_direct_mv_pred = X264_DIRECT_PRED_AUTO;
-                param->analyse.inter |= X264_ANALYSE_PSUB8x8;
-                param->analyse.b_fast_pskip = 0;
-                param->analyse.i_trellis = 2;
-                param->i_bframe = 16;
-                param->rc.i_lookahead = 60;
-                b_turbo = 0;
-            }
-            else
-            {
-                fprintf( stderr, "x264 [error]: invalid preset: %s\n", optarg );
-                return -1;
-            }
-        }
-        else if( c == '?' )
-            return -1;
-    }
-
-    /* Tunings are applied next. */
-    for( optind = 0;; )
-    {
-        int c = getopt_long( argc, argv, short_options, long_options, NULL );
-        if( c == -1 )
-            break;
-
+            preset = optarg;
         if( c == OPT_TUNE )
-        {
-            if( !strcasecmp( optarg, "film" ) )
-            {
-                param->i_deblocking_filter_alphac0 = -1;
-                param->i_deblocking_filter_beta = -1;
-                param->analyse.f_psy_trellis = 0.15;
-            }
-            else if( !strcasecmp( optarg, "animation" ) )
-            {
-                param->i_frame_reference = param->i_frame_reference > 1 ? param->i_frame_reference*2 : 1;
-                param->i_deblocking_filter_alphac0 = 1;
-                param->i_deblocking_filter_beta = 1;
-                param->analyse.f_psy_rd = 0.4;
-                param->rc.f_aq_strength = 0.6;
-                param->i_bframe += 2;
-            }
-            else if( !strcasecmp( optarg, "grain" ) )
-            {
-                param->i_deblocking_filter_alphac0 = -2;
-                param->i_deblocking_filter_beta = -2;
-                param->analyse.f_psy_trellis = 0.25;
-                param->analyse.b_dct_decimate = 0;
-                param->rc.f_pb_factor = 1.1;
-                param->rc.f_ip_factor = 1.1;
-                param->rc.f_aq_strength = 0.5;
-                param->analyse.i_luma_deadzone[0] = 6;
-                param->analyse.i_luma_deadzone[1] = 6;
-                param->rc.f_qcompress = 0.8;
-            }
-            else if( !strcasecmp( optarg, "psnr" ) )
-            {
-                param->rc.i_aq_mode = X264_AQ_NONE;
-                param->analyse.b_psy = 0;
-            }
-            else if( !strcasecmp( optarg, "ssim" ) )
-            {
-                param->rc.i_aq_mode = X264_AQ_AUTOVARIANCE;
-                param->analyse.b_psy = 0;
-            }
-            else if( !strcasecmp( optarg, "fastdecode" ) )
-            {
-                param->b_deblocking_filter = 0;
-                param->b_cabac = 0;
-                param->analyse.b_weighted_bipred = 0;
-                param->analyse.i_weighted_pred = X264_WEIGHTP_NONE;
-            }
-            else if( !strcasecmp( optarg, "zerolatency" ) )
-            {
-                param->rc.i_lookahead = 0;
-                param->i_sync_lookahead = 0;
-                param->i_bframe = 0;
-                param->b_sliced_threads = 1;
-            }
-            else if( !strcasecmp( optarg, "touhou" ) )
-            {
-                param->i_frame_reference = param->i_frame_reference > 1 ? param->i_frame_reference*2 : 1;
-                param->i_deblocking_filter_alphac0 = -1;
-                param->i_deblocking_filter_beta = -1;
-                param->analyse.f_psy_trellis = 0.2;
-                param->rc.f_aq_strength = 1.3;
-                if( param->analyse.inter & X264_ANALYSE_PSUB16x16 )
-                    param->analyse.inter |= X264_ANALYSE_PSUB8x8;
-            }
-            else
-            {
-                fprintf( stderr, "x264 [error]: invalid tune: %s\n", optarg );
-                return -1;
-            }
-        }
+            tune = optarg;
         else if( c == '?' )
             return -1;
     }
+
+    if( preset && !strcasecmp( preset, "placebo" ) )
+        b_turbo = 0;
+
+    if( x264_param_default_preset( param, preset, tune ) < 0 )
+        return -1;
 
     /* Parse command line options */
     for( optind = 0;; )
@@ -954,39 +982,30 @@ static int  Parse( int argc, char **argv,
 #endif
                 exit(0);
             case OPT_FRAMES:
-                param->i_frame_total = atoi( optarg );
+                param->i_frame_total = X264_MAX( atoi( optarg ), 0 );
                 break;
             case OPT_SEEK:
-                opt->i_seek = atoi( optarg );
+                opt->i_seek = input_opt.seek = X264_MAX( atoi( optarg ), 0 );
                 break;
             case 'o':
                 output_filename = optarg;
                 break;
-            case OPT_STDOUT_FORMAT:
-                for( i = 0; stdout_format_names[i] && strcasecmp( stdout_format_names[i], optarg ); )
-                    i++;
-                if( !stdout_format_names[i] )
-                {
-                    fprintf( stderr, "x264 [error]: invalid stdout format `%s'\n", optarg );
+            case OPT_MUXER:
+                if( parse_enum_name( optarg, muxer_names, &muxer ) < 0 )
                     return -1;
-                }
-                stdout_format = optarg;
                 break;
-            case OPT_STDIN_FORMAT:
-                for( i = 0; stdin_format_names[i] && strcasecmp( stdin_format_names[i], optarg ); )
-                    i++;
-                if( !stdin_format_names[i] )
-                {
-                    fprintf( stderr, "x264 [error]: invalid stdin format `%s'\n", optarg );
+            case OPT_DEMUXER:
+                if( parse_enum_name( optarg, demuxer_names, &demuxer ) < 0 )
                     return -1;
-                }
-                stdin_format = optarg;
+                break;
+            case OPT_INDEX:
+                input_opt.index = optarg;
                 break;
             case OPT_QPFILE:
                 opt->qpfile = fopen( optarg, "rb" );
                 if( !opt->qpfile )
                 {
-                    fprintf( stderr, "x264 [error]: can't open `%s'\n", optarg );
+                    fprintf( stderr, "x264 [error]: can't open qpfile `%s'\n", optarg );
                     return -1;
                 }
                 else if( !x264_is_regular_file( opt->qpfile ) )
@@ -1009,7 +1028,7 @@ static int  Parse( int argc, char **argv,
                 opt->b_progress = 0;
                 break;
             case OPT_VISUALIZE:
-#ifdef VISUALIZE
+#ifdef HAVE_VISUALIZE
                 param->b_visualize = 1;
                 b_exit_on_ctrl_c = 1;
 #else
@@ -1028,19 +1047,37 @@ static int  Parse( int argc, char **argv,
             case 'r':
                 b_user_ref = 1;
                 goto generic_option;
-            case 'p':
-                b_pass1 = atoi( optarg ) == 1;
-                goto generic_option;
             case OPT_FPS:
                 b_user_fps = 1;
+                param->b_vfr_input = 0;
                 goto generic_option;
+            case OPT_INTERLACED:
+                b_user_interlaced = 1;
+                goto generic_option;
+            case OPT_TCFILE_IN:
+                tcfile_name = optarg;
+                break;
+            case OPT_TCFILE_OUT:
+                opt->tcfile_out = fopen( optarg, "wb" );
+                if( !opt->tcfile_out )
+                {
+                    fprintf( stderr, "x264 [error]: can't open `%s'\n", optarg );
+                    return -1;
+                }
+                break;
+            case OPT_TIMEBASE:
+                input_opt.timebase = optarg;
+                break;
+            case OPT_PULLDOWN:
+                if( parse_enum_value( optarg, pulldown_names, &opt->i_pulldown ) < 0 )
+                    return -1;
+                break;
             default:
 generic_option:
             {
-                int i;
                 if( long_options_index < 0 )
                 {
-                    for( i = 0; long_options[i].name; i++ )
+                    for( int i = 0; long_options[i].name; i++ )
                         if( long_options[i].val == c )
                         {
                             long_options_index = i;
@@ -1065,54 +1102,13 @@ generic_option:
         }
     }
 
-    /* Set faster options in case of turbo firstpass. */
-    if( b_turbo && b_pass1 )
-    {
-        param->i_frame_reference = 1;
-        param->analyse.b_transform_8x8 = 0;
-        param->analyse.inter = 0;
-        param->analyse.i_me_method = X264_ME_DIA;
-        param->analyse.i_subpel_refine = X264_MIN( 2, param->analyse.i_subpel_refine );
-        param->analyse.i_trellis = 0;
-    }
+    /* If first pass mode is used, apply faster settings. */
+    if( b_turbo )
+        x264_param_apply_fastfirstpass( param );
 
     /* Apply profile restrictions. */
-    if( profile )
-    {
-        if( !strcasecmp( profile, "baseline" ) )
-        {
-            param->analyse.b_transform_8x8 = 0;
-            param->b_cabac = 0;
-            param->i_cqm_preset = X264_CQM_FLAT;
-            param->i_bframe = 0;
-            param->analyse.i_weighted_pred = X264_WEIGHTP_NONE;
-            if( param->b_interlaced )
-            {
-                fprintf( stderr, "x264 [error]: baseline profile doesn't support interlacing\n" );
-                return -1;
-            }
-        }
-        else if( !strcasecmp( profile, "main" ) )
-        {
-            param->analyse.b_transform_8x8 = 0;
-            param->i_cqm_preset = X264_CQM_FLAT;
-        }
-        else if( !strcasecmp( profile, "high" ) )
-        {
-            /* Default */
-        }
-        else
-        {
-            fprintf( stderr, "x264 [error]: invalid profile: %s\n", profile );
-            return -1;
-        }
-        if( (param->rc.i_rc_method == X264_RC_CQP && param->rc.i_qp_constant == 0) ||
-            (param->rc.i_rc_method == X264_RC_CRF && param->rc.f_rf_constant == 0) )
-        {
-            fprintf( stderr, "x264 [error]: %s profile doesn't support lossless\n", profile );
-            return -1;
-        }
-    }
+    if( x264_param_apply_profile( param, profile ) < 0 )
+        return -1;
 
     /* Get the file name */
     if( optind > argc - 1 || !output_filename )
@@ -1121,9 +1117,8 @@ generic_option:
                  optind > argc - 1 ? "input" : "output" );
         return -1;
     }
-    input_filename = argv[optind++];
 
-    if( select_output( output_filename, stdout_format, param ) )
+    if( select_output( muxer, output_filename, param ) )
         return -1;
     if( output.open_file( output_filename, &opt->hout ) )
     {
@@ -1131,31 +1126,118 @@ generic_option:
         return -1;
     }
 
-    if( select_input( input_filename, optind < argc ? argv[optind++] : NULL, stdin_format, param ) )
+    input_filename = argv[optind++];
+    input_opt.resolution = optind < argc ? argv[optind++] : NULL;
+    video_info_t info = {0};
+    char demuxername[5];
+
+    /* set info flags to param flags to be overwritten by demuxer as necessary. */
+    info.csp        = param->i_csp;
+    info.fps_num    = param->i_fps_num;
+    info.fps_den    = param->i_fps_den;
+    info.interlaced = param->b_interlaced;
+    info.sar_width  = param->vui.i_sar_width;
+    info.sar_height = param->vui.i_sar_height;
+    info.tff        = param->b_tff;
+    info.vfr        = param->b_vfr_input;
+
+    if( select_input( demuxer, demuxername, input_filename, &opt->hin, &info, &input_opt ) )
         return -1;
 
+    if( !opt->hin && input.open_file( input_filename, &opt->hin, &info, &input_opt ) )
     {
-        int i_fps_num = param->i_fps_num;
-        int i_fps_den = param->i_fps_den;
+        fprintf( stderr, "x264 [error]: could not open input file `%s'\n", input_filename );
+        return -1;
+    }
 
-        if( input.open_file( input_filename, &opt->hin, param ) )
-        {
-            fprintf( stderr, "x264 [error]: could not open input file `%s'\n", input_filename );
-            return -1;
-        }
-        /* Restore the user's frame rate if fps has been explicitly set on the commandline. */
+    x264_reduce_fraction( &info.sar_width, &info.sar_height );
+    x264_reduce_fraction( &info.fps_num, &info.fps_den );
+    if( param->i_log_level >= X264_LOG_INFO )
+        fprintf( stderr, "%s [info]: %dx%d%c %d:%d @ %d/%d fps (%cfr)\n", demuxername, info.width,
+                 info.height, info.interlaced ? 'i' : 'p', info.sar_width, info.sar_height,
+                 info.fps_num, info.fps_den, info.vfr ? 'v' : 'c' );
+
+    if( tcfile_name )
+    {
         if( b_user_fps )
         {
-            param->i_fps_num = i_fps_num;
-            param->i_fps_den = i_fps_den;
+            fprintf( stderr, "x264 [error]: --fps + --tcfile-in is incompatible.\n" );
+            return -1;
         }
+        if( timecode_input.open_file( tcfile_name, &opt->hin, &info, &input_opt ) )
+        {
+            fprintf( stderr, "x264 [error]: timecode input failed\n" );
+            return -1;
+        }
+        else
+            input = timecode_input;
+    }
+    else if( !info.vfr && input_opt.timebase )
+    {
+        fprintf( stderr, "x264 [error]: --timebase is incompatible with cfr input\n" );
+        return -1;
+    }
+
+    /* set param flags from the info flags as necessary */
+    param->i_csp       = info.csp;
+    param->i_height    = info.height;
+    param->b_vfr_input = info.vfr;
+    param->i_width     = info.width;
+    if( !b_user_interlaced && info.interlaced )
+    {
+        fprintf( stderr, "x264 [warning]: input appears to be interlaced, enabling %cff interlaced mode.\n"
+                         "                If you want otherwise, use --no-interlaced or --%cff\n",
+                 info.tff ? 't' : 'b', info.tff ? 'b' : 't' );
+        param->b_interlaced = 1;
+        param->b_tff = !!info.tff;
+    }
+    if( !b_user_fps )
+    {
+        param->i_fps_num = info.fps_num;
+        param->i_fps_den = info.fps_den;
+    }
+    if( param->b_vfr_input )
+    {
+        param->i_timebase_num = info.timebase_num;
+        param->i_timebase_den = info.timebase_den;
+    }
+    else
+    {
+        param->i_timebase_num = param->i_fps_den;
+        param->i_timebase_den = param->i_fps_num;
+    }
+    if( !tcfile_name && input_opt.timebase )
+    {
+        int i_user_timebase_num;
+        int i_user_timebase_den;
+        int ret = sscanf( input_opt.timebase, "%d/%d", &i_user_timebase_num, &i_user_timebase_den );
+        if( !ret )
+        {
+            fprintf( stderr, "x264 [error]: invalid argument: timebase = %s\n", input_opt.timebase );
+            return -1;
+        }
+        else if( ret == 1 )
+        {
+            i_user_timebase_num = param->i_timebase_num;
+            i_user_timebase_den = atoi( input_opt.timebase );
+        }
+        opt->timebase_convert_multiplier = ((double)i_user_timebase_den / param->i_timebase_den)
+                                         * ((double)param->i_timebase_num / i_user_timebase_num);
+        param->i_timebase_num = i_user_timebase_num;
+        param->i_timebase_den = i_user_timebase_den;
+        param->b_vfr_input = 1;
+    }
+    if( !param->vui.i_sar_width || !param->vui.i_sar_height )
+    {
+        param->vui.i_sar_width  = info.sar_width;
+        param->vui.i_sar_height = info.sar_height;
     }
 
 #ifdef HAVE_PTHREAD
     if( b_thread_input || param->i_threads > 1
         || (param->i_threads == X264_THREADS_AUTO && x264_cpu_num_processors() > 1) )
     {
-        if( thread_input.open_file( NULL, &opt->hin, param ) )
+        if( thread_input.open_file( NULL, &opt->hin, &info, NULL ) )
         {
             fprintf( stderr, "x264 [error]: threaded input failed\n" );
             return -1;
@@ -1171,12 +1253,11 @@ generic_option:
     if( !b_user_ref )
     {
         int mbs = (((param->i_width)+15)>>4) * (((param->i_height)+15)>>4);
-        int i;
-        for( i = 0; x264_levels[i].level_idc != 0; i++ )
+        for( int i = 0; x264_levels[i].level_idc != 0; i++ )
             if( param->i_level_idc == x264_levels[i].level_idc )
             {
-                while( mbs * 384 * param->i_frame_reference > x264_levels[i].dpb
-                       && param->i_frame_reference > 1 )
+                while( mbs * 384 * param->i_frame_reference > x264_levels[i].dpb &&
+                       param->i_frame_reference > 1 )
                 {
                     param->i_frame_reference--;
                 }
@@ -1229,38 +1310,36 @@ static void parse_qpfile( cli_opt_t *opt, x264_picture_t *pic, int i_frame )
  * Encode:
  *****************************************************************************/
 
-static int  Encode_frame( x264_t *h, hnd_t hout, x264_picture_t *pic )
+static int  Encode_frame( x264_t *h, hnd_t hout, x264_picture_t *pic, int64_t *last_pts )
 {
     x264_picture_t pic_out;
     x264_nal_t *nal;
-    int i_nal, i, i_nalu_size;
-    int i_file = 0;
+    int i_nal;
+    int i_frame_size = 0;
 
-    if( x264_encoder_encode( h, &nal, &i_nal, pic, &pic_out ) < 0 )
+    i_frame_size = x264_encoder_encode( h, &nal, &i_nal, pic, &pic_out );
+
+    if( i_frame_size < 0 )
     {
         fprintf( stderr, "x264 [error]: x264_encoder_encode failed\n" );
         return -1;
     }
 
-    for( i = 0; i < i_nal; i++ )
+    if( i_frame_size )
     {
-        i_nalu_size = output.write_nalu( hout, nal[i].p_payload, nal[i].i_payload, &pic_out );
-        if( i_nalu_size < 0 )
-            return -1;
-        i_file += i_nalu_size;
+        i_frame_size = output.write_frame( hout, nal[0].p_payload, i_frame_size, &pic_out );
+        *last_pts = pic_out.i_pts;
     }
-    if( i_nal )
-        output.set_eop( hout, &pic_out );
 
-    return i_file;
+    return i_frame_size;
 }
 
-static void Print_status( int64_t i_start, int i_frame, int i_frame_total, int64_t i_file, x264_param_t *param )
+static void Print_status( int64_t i_start, int i_frame, int i_frame_total, int64_t i_file, x264_param_t *param, int64_t last_pts )
 {
     char    buf[200];
     int64_t i_elapsed = x264_mdate() - i_start;
     double fps = i_elapsed > 0 ? i_frame * 1000000. / i_elapsed : 0;
-    double bitrate = (double) i_file * 8 * param->i_fps_num / ( (double) param->i_fps_den * i_frame * 1000 );
+    double bitrate = (double) i_file * 8 / ( (double) last_pts * 1000 * param->i_timebase_num / param->i_timebase_den );
     if( i_frame_total )
     {
         int eta = i_elapsed * (i_frame_total - i_frame) / ((int64_t)i_frame * 1000000);
@@ -1281,12 +1360,23 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
 {
     x264_t *h;
     x264_picture_t pic;
+    const cli_pulldown_t *pulldown = NULL; // shut up gcc
 
     int     i_frame, i_frame_total, i_frame_output;
     int64_t i_start, i_end;
-    int64_t i_file;
+    int64_t i_file = 0;
     int     i_frame_size;
     int     i_update_interval;
+    int64_t last_pts = 0;
+#   define  MAX_PTS_WARNING 3 /* arbitrary */
+    int     pts_warning_cnt = 0;
+    int64_t largest_pts = -1;
+    int64_t second_largest_pts = -1;
+    int64_t ticks_per_frame;
+    double  duration;
+    int     prev_timebase_den = param->i_timebase_den / gcd( param->i_timebase_num, param->i_timebase_den );
+    int     dts_compress_multiplier;
+    double  pulldown_pts = 0;
 
     opt->b_progress &= param->i_log_level < X264_LOG_DEBUG;
     i_frame_total = input.get_frame_total( opt->hin );
@@ -1297,6 +1387,20 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
     param->i_frame_total = i_frame_total;
     i_update_interval = i_frame_total ? x264_clip3( i_frame_total / 1000, 1, 10 ) : 10;
 
+    /* set up pulldown */
+    if( opt->i_pulldown && !param->b_vfr_input )
+    {
+        param->b_pic_struct = 1;
+        pulldown = &pulldown_values[opt->i_pulldown];
+        param->i_timebase_num = param->i_fps_den;
+        if( fmod( param->i_fps_num * pulldown->fps_factor, 1 ) )
+        {
+            fprintf( stderr, "x264 [error]: unsupported framerate for chosen pulldown\n" );
+            return -1;
+        }
+        param->i_timebase_den = param->i_fps_num * pulldown->fps_factor;
+    }
+
     if( ( h = x264_encoder_open( param ) ) == NULL )
     {
         fprintf( stderr, "x264 [error]: x264_encoder_open failed\n" );
@@ -1304,11 +1408,15 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
         return -1;
     }
 
+    x264_encoder_parameters( h, param );
+
+    dts_compress_multiplier = param->i_timebase_den / prev_timebase_den;
+
     if( output.set_param( opt->hout, param ) )
     {
         fprintf( stderr, "x264 [error]: can't set outfile param\n" );
         input.close_file( opt->hin );
-        output.close_file( opt->hout );
+        output.close_file( opt->hout, largest_pts, second_largest_pts );
         return -1;
     }
 
@@ -1320,14 +1428,72 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
     }
 
     i_start = x264_mdate();
+    /* ticks/frame = ticks/second / frames/second */
+    ticks_per_frame = (int64_t)param->i_timebase_den * param->i_fps_den / param->i_timebase_num / param->i_fps_num;
+    if( ticks_per_frame < 1 )
+    {
+        fprintf( stderr, "x264 [error]: ticks_per_frame invalid: %"PRId64"\n", ticks_per_frame );
+        return -1;
+    }
+
+    if( !param->b_repeat_headers )
+    {
+        // Write SPS/PPS/SEI
+        x264_nal_t *headers;
+        int i_nal;
+
+        if( x264_encoder_headers( h, &headers, &i_nal ) < 0 )
+        {
+            fprintf( stderr, "x264 [error]: x264_encoder_headers failed\n" );
+            return -1;
+        }
+
+        if( (i_file = output.write_headers( opt->hout, headers )) < 0 )
+            return -1;
+    }
+
+    if( opt->tcfile_out )
+        fprintf( opt->tcfile_out, "# timecode format v2\n" );
 
     /* Encode frames */
-    for( i_frame = 0, i_file = 0, i_frame_output = 0; b_ctrl_c == 0 && (i_frame < i_frame_total || i_frame_total == 0); )
+    for( i_frame = 0, i_frame_output = 0; b_ctrl_c == 0 && (i_frame < i_frame_total || i_frame_total == 0); )
     {
         if( input.read_frame( &pic, opt->hin, i_frame + opt->i_seek ) )
             break;
 
-        pic.i_pts = (int64_t)i_frame * param->i_fps_den;
+        if( !param->b_vfr_input )
+            pic.i_pts = i_frame;
+
+        if( opt->i_pulldown && !param->b_vfr_input )
+        {
+            pic.i_pic_struct = pulldown->pattern[ i_frame % pulldown->mod ];
+            pic.i_pts = (int64_t)( pulldown_pts + 0.5 );
+            pulldown_pts += pulldown_frame_duration[pic.i_pic_struct];
+        }
+        else if( opt->timebase_convert_multiplier )
+            pic.i_pts = (int64_t)( pic.i_pts * opt->timebase_convert_multiplier + 0.5 );
+
+        int64_t output_pts = pic.i_pts * dts_compress_multiplier;   /* pts libx264 returns */
+
+        if( pic.i_pts <= largest_pts )
+        {
+            if( param->i_log_level >= X264_LOG_WARNING )
+            {
+                if( param->i_log_level >= X264_LOG_DEBUG || pts_warning_cnt < MAX_PTS_WARNING )
+                    fprintf( stderr, "x264 [warning]: non-strictly-monotonic pts at frame %d (%"PRId64" <= %"PRId64")\n",
+                             i_frame, output_pts, largest_pts * dts_compress_multiplier );
+                else if( pts_warning_cnt == MAX_PTS_WARNING )
+                    fprintf( stderr, "x264 [warning]: too many nonmonotonic pts warnings, suppressing further ones\n" );
+                pts_warning_cnt++;
+            }
+            pic.i_pts = largest_pts + ticks_per_frame;
+            output_pts = pic.i_pts * dts_compress_multiplier;
+        }
+
+        second_largest_pts = largest_pts;
+        largest_pts = pic.i_pts;
+        if( opt->tcfile_out )
+            fprintf( opt->tcfile_out, "%.6f\n", output_pts * ((double)param->i_timebase_num / param->i_timebase_den) * 1e3 );
 
         if( opt->qpfile )
             parse_qpfile( opt, &pic, i_frame + opt->i_seek );
@@ -1338,7 +1504,7 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
             pic.i_qpplus1 = 0;
         }
 
-        i_frame_size = Encode_frame( h, opt->hout, &pic );
+        i_frame_size = Encode_frame( h, opt->hout, &pic, &last_pts );
         if( i_frame_size < 0 )
             return -1;
         i_file += i_frame_size;
@@ -1352,20 +1518,30 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
 
         /* update status line (up to 1000 times per input file) */
         if( opt->b_progress && i_frame_output % i_update_interval == 0 && i_frame_output )
-            Print_status( i_start, i_frame_output, i_frame_total, i_file, param );
+            Print_status( i_start, i_frame_output, i_frame_total, i_file, param, last_pts );
     }
     /* Flush delayed frames */
     while( !b_ctrl_c && x264_encoder_delayed_frames( h ) )
     {
-        i_frame_size = Encode_frame( h, opt->hout, NULL );
+        i_frame_size = Encode_frame( h, opt->hout, NULL, &last_pts );
         if( i_frame_size < 0 )
             return -1;
         i_file += i_frame_size;
         if( i_frame_size )
             i_frame_output++;
         if( opt->b_progress && i_frame_output % i_update_interval == 0 && i_frame_output )
-            Print_status( i_start, i_frame_output, i_frame_total, i_file, param );
+            Print_status( i_start, i_frame_output, i_frame_total, i_file, param, last_pts );
     }
+    if( pts_warning_cnt >= MAX_PTS_WARNING && param->i_log_level < X264_LOG_DEBUG )
+        fprintf( stderr, "x264 [warning]: %d suppressed nonmonotonic pts warnings\n", pts_warning_cnt-MAX_PTS_WARNING );
+
+    /* duration algorithm fails when only 1 frame is output */
+    if( i_frame_output == 1 )
+        duration = (double)param->i_fps_den / param->i_fps_num;
+    else
+        duration = (double)(2 * largest_pts - second_largest_pts) * param->i_timebase_num / param->i_timebase_den;
+    if( !(opt->i_pulldown && !param->b_vfr_input) )
+        duration *= dts_compress_multiplier;
 
     i_end = x264_mdate();
     input.picture_clean( &pic );
@@ -1378,8 +1554,14 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
     if( b_ctrl_c )
         fprintf( stderr, "aborted at input frame %d, output frame %d\n", opt->i_seek + i_frame, i_frame_output );
 
+    if( opt->tcfile_out )
+    {
+        fclose( opt->tcfile_out );
+        opt->tcfile_out = NULL;
+    }
+
     input.close_file( opt->hin );
-    output.close_file( opt->hout );
+    output.close_file( opt->hout, largest_pts, second_largest_pts );
 
     if( i_frame_output > 0 )
     {
@@ -1387,8 +1569,7 @@ static int  Encode( x264_param_t *param, cli_opt_t *opt )
                      (double)( i_end - i_start );
 
         fprintf( stderr, "encoded %d frames, %.2f fps, %.2f kb/s\n", i_frame_output, fps,
-                 (double) i_file * 8 * param->i_fps_num /
-                 ( (double) param->i_fps_den * i_frame_output * 1000 ) );
+                 (double) i_file * 8 / ( 1000 * duration ) );
     }
 
     return 0;

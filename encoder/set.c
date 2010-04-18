@@ -28,11 +28,13 @@
 
 #define bs_write_ue bs_write_ue_big
 
+// Indexed by pic_struct values
+static const uint8_t num_clock_ts[10] = { 0, 1, 1, 1, 2, 2, 3, 3, 2, 3 };
+
 static void transpose( uint8_t *buf, int w )
 {
-    int i, j;
-    for( i = 0; i < w; i++ )
-        for( j = 0; j < i; j++ )
+    for( int i = 0; i < w; i++ )
+        for( int j = 0; j < i; j++ )
             XCHG( uint8_t, buf[w*i+j], buf[w*j+i] );
 }
 
@@ -53,7 +55,7 @@ static void scaling_list_write( bs_t *s, x264_pps_t *pps, int idx )
     }
     else
     {
-        int j, run;
+        int run;
         bs_write( s, 1, 1 ); // scaling_list_present_flag
 
         // try run-length compression of trailing values
@@ -63,12 +65,35 @@ static void scaling_list_write( bs_t *s, x264_pps_t *pps, int idx )
         if( run < len && len - run < bs_size_se( (int8_t)-list[zigzag[run]] ) )
             run = len;
 
-        for( j = 0; j < run; j++ )
+        for( int j = 0; j < run; j++ )
             bs_write_se( s, (int8_t)(list[zigzag[j]] - (j>0 ? list[zigzag[j-1]] : 8)) ); // delta
 
         if( run < len )
             bs_write_se( s, (int8_t)-list[zigzag[run]] );
     }
+}
+
+static uint8_t *x264_sei_write_header( bs_t *s, int payload_type )
+{
+    bs_write( s, 8, payload_type );
+
+    bs_flush( s );
+    uint8_t *p_start = s->p;
+    bs_realign( s );
+
+    bs_write( s, 8, 0 );
+    return p_start;
+}
+
+static void x264_sei_write( bs_t *s, uint8_t *p_start )
+{
+    bs_align_10( s );
+    bs_flush( s );
+
+    p_start[0] = s->p - p_start - 1; // -1 for the length byte
+    bs_realign( s );
+
+    bs_rbsp_trailing( s );
 }
 
 void x264_sps_init( x264_sps_t *sps, int i_id, x264_param_t *param )
@@ -179,14 +204,20 @@ void x264_sps_init( x264_sps_t *sps, int i_id, x264_param_t *param )
         sps->vui.i_chroma_loc_bottom = param->vui.i_chroma_loc;
     }
 
-    sps->vui.b_timing_info_present = 0;
-    if( param->i_fps_num > 0 && param->i_fps_den > 0)
+    sps->vui.b_timing_info_present = param->i_timebase_num > 0 && param->i_timebase_den > 0;
+
+    if( sps->vui.b_timing_info_present )
     {
-        sps->vui.b_timing_info_present = 1;
-        sps->vui.i_num_units_in_tick = param->i_fps_den;
-        sps->vui.i_time_scale = param->i_fps_num * 2;
-        sps->vui.b_fixed_frame_rate = 1;
+        sps->vui.i_num_units_in_tick = param->i_timebase_num;
+        sps->vui.i_time_scale = param->i_timebase_den * 2;
+        sps->vui.b_fixed_frame_rate = !param->b_vfr_input;
     }
+
+    sps->vui.b_vcl_hrd_parameters_present = 0; // we don't support VCL HRD
+    sps->vui.b_nal_hrd_parameters_present = !!param->i_nal_hrd;
+    sps->vui.b_pic_struct_present = param->b_pic_struct;
+
+    // NOTE: HRD related parts of the SPS are initialised in x264_ratecontrol_init_reconfigurable
 
     sps->vui.i_num_reorder_frames = param->i_bframe_pyramid ? 2 : param->i_bframe ? 1 : 0;
     /* extra slot with pyramid so that we don't have to override the
@@ -203,13 +234,13 @@ void x264_sps_init( x264_sps_t *sps, int i_id, x264_param_t *param )
         sps->vui.i_max_bytes_per_pic_denom = 0;
         sps->vui.i_max_bits_per_mb_denom = 0;
         sps->vui.i_log2_max_mv_length_horizontal =
-        sps->vui.i_log2_max_mv_length_vertical = (int)(log(param->analyse.i_mv_range*4-1)/log(2)) + 1;
+        sps->vui.i_log2_max_mv_length_vertical = (int)log2f( X264_MAX( 1, param->analyse.i_mv_range*4-1 ) ) + 1;
     }
 }
 
-
 void x264_sps_write( bs_t *s, x264_sps_t *sps )
 {
+    bs_realign( s );
     bs_write( s, 8, sps->i_profile_idc );
     bs_write( s, 1, sps->b_constraint_set0 );
     bs_write( s, 1, sps->b_constraint_set1 );
@@ -342,9 +373,30 @@ void x264_sps_write( bs_t *s, x264_sps_t *sps )
             bs_write1( s, sps->vui.b_fixed_frame_rate );
         }
 
-        bs_write1( s, 0 );      /* nal_hrd_parameters_present_flag */
-        bs_write1( s, 0 );      /* vcl_hrd_parameters_present_flag */
-        bs_write1( s, 0 );      /* pic_struct_present_flag */
+        bs_write1( s, sps->vui.b_nal_hrd_parameters_present );
+        if( sps->vui.b_nal_hrd_parameters_present )
+        {
+            bs_write_ue( s, sps->vui.hrd.i_cpb_cnt - 1 );
+            bs_write( s, 4, sps->vui.hrd.i_bit_rate_scale );
+            bs_write( s, 4, sps->vui.hrd.i_cpb_size_scale );
+
+            bs_write_ue( s, sps->vui.hrd.i_bit_rate_value - 1 );
+            bs_write_ue( s, sps->vui.hrd.i_cpb_size_value - 1 );
+
+            bs_write1( s, sps->vui.hrd.b_cbr_hrd );
+
+            bs_write( s, 5, sps->vui.hrd.i_initial_cpb_removal_delay_length - 1 );
+            bs_write( s, 5, sps->vui.hrd.i_cpb_removal_delay_length - 1 );
+            bs_write( s, 5, sps->vui.hrd.i_dpb_output_delay_length - 1 );
+            bs_write( s, 5, sps->vui.hrd.i_time_offset_length );
+        }
+
+        bs_write1( s, sps->vui.b_vcl_hrd_parameters_present );
+
+        if( sps->vui.b_nal_hrd_parameters_present || sps->vui.b_vcl_hrd_parameters_present )
+            bs_write1( s, 0 );   /* low_delay_hrd_flag */
+
+        bs_write1( s, sps->vui.b_pic_struct_present );
         bs_write1( s, sps->vui.b_bitstream_restriction );
         if( sps->vui.b_bitstream_restriction )
         {
@@ -359,12 +411,11 @@ void x264_sps_write( bs_t *s, x264_sps_t *sps )
     }
 
     bs_rbsp_trailing( s );
+    bs_flush( s );
 }
 
 void x264_pps_init( x264_pps_t *pps, int i_id, x264_param_t *param, x264_sps_t *sps )
 {
-    int i, j;
-
     pps->i_id = i_id;
     pps->i_sps_id = sps->i_id;
     pps->b_cabac = param->b_cabac;
@@ -372,8 +423,8 @@ void x264_pps_init( x264_pps_t *pps, int i_id, x264_param_t *param, x264_sps_t *
     pps->b_pic_order = param->b_interlaced;
     pps->i_num_slice_groups = 1;
 
-    pps->i_num_ref_idx_l0_active = 1;
-    pps->i_num_ref_idx_l1_active = 1;
+    pps->i_num_ref_idx_l0_default_active = param->i_frame_reference;
+    pps->i_num_ref_idx_l1_default_active = 1;
 
     pps->b_weighted_pred = param->analyse.i_weighted_pred > 0;
     pps->b_weighted_bipred = param->analyse.b_weighted_bipred ? 2 : 0;
@@ -392,11 +443,11 @@ void x264_pps_init( x264_pps_t *pps, int i_id, x264_param_t *param, x264_sps_t *
     switch( pps->i_cqm_preset )
     {
     case X264_CQM_FLAT:
-        for( i = 0; i < 6; i++ )
+        for( int i = 0; i < 6; i++ )
             pps->scaling_list[i] = x264_cqm_flat16;
         break;
     case X264_CQM_JVT:
-        for( i = 0; i < 6; i++ )
+        for( int i = 0; i < 6; i++ )
             pps->scaling_list[i] = x264_cqm_jvt[i];
         break;
     case X264_CQM_CUSTOM:
@@ -413,8 +464,8 @@ void x264_pps_init( x264_pps_t *pps, int i_id, x264_param_t *param, x264_sps_t *
         pps->scaling_list[CQM_4PC] = param->cqm_4pc;
         pps->scaling_list[CQM_8IY+4] = param->cqm_8iy;
         pps->scaling_list[CQM_8PY+4] = param->cqm_8py;
-        for( i = 0; i < 6; i++ )
-            for( j = 0; j < (i<4?16:64); j++ )
+        for( int i = 0; i < 6; i++ )
+            for( int j = 0; j < (i < 4 ? 16 : 64); j++ )
                 if( pps->scaling_list[i][j] == 0 )
                     pps->scaling_list[i] = x264_cqm_jvt[i];
         break;
@@ -423,6 +474,7 @@ void x264_pps_init( x264_pps_t *pps, int i_id, x264_param_t *param, x264_sps_t *
 
 void x264_pps_write( bs_t *s, x264_pps_t *pps )
 {
+    bs_realign( s );
     bs_write_ue( s, pps->i_id );
     bs_write_ue( s, pps->i_sps_id );
 
@@ -430,8 +482,8 @@ void x264_pps_write( bs_t *s, x264_pps_t *pps )
     bs_write( s, 1, pps->b_pic_order );
     bs_write_ue( s, pps->i_num_slice_groups - 1 );
 
-    bs_write_ue( s, pps->i_num_ref_idx_l0_active - 1 );
-    bs_write_ue( s, pps->i_num_ref_idx_l1_active - 1 );
+    bs_write_ue( s, pps->i_num_ref_idx_l0_default_active - 1 );
+    bs_write_ue( s, pps->i_num_ref_idx_l1_default_active - 1 );
     bs_write( s, 1, pps->b_weighted_pred );
     bs_write( s, 2, pps->b_weighted_bipred );
 
@@ -465,6 +517,21 @@ void x264_pps_write( bs_t *s, x264_pps_t *pps )
     }
 
     bs_rbsp_trailing( s );
+    bs_flush( s );
+}
+
+void x264_sei_recovery_point_write( x264_t *h, bs_t *s, int recovery_frame_cnt )
+{
+    bs_realign( s );
+    uint8_t *p_start = x264_sei_write_header( s, SEI_RECOVERY_POINT );
+
+    bs_write_ue( s, recovery_frame_cnt ); // recovery_frame_cnt
+    bs_write( s, 1, 1 ); //exact_match_flag 1
+    bs_write( s, 1, 0 ); //broken_link_flag 0
+    bs_write( s, 2, 0 ); //changing_slice_group 0
+
+    x264_sei_write( s, p_start );
+    bs_flush( s );
 }
 
 int x264_sei_version_write( x264_t *h, bs_t *s )
@@ -484,22 +551,24 @@ int x264_sei_version_write( x264_t *h, bs_t *s )
     CHECKED_MALLOC( version, 200 + strlen( opts ) );
 
     sprintf( version, "x264 - core %d%s - H.264/MPEG-4 AVC codec - "
-             "Copyleft 2003-2009 - http://www.videolan.org/x264.html - options: %s",
+             "Copyleft 2003-2010 - http://www.videolan.org/x264.html - options: %s",
              X264_BUILD, X264_VERSION, opts );
     length = strlen(version)+1+16;
 
-    bs_write( s, 8, 0x5 ); // payload_type = user_data_unregistered
+    bs_realign( s );
+    bs_write( s, 8, SEI_USER_DATA_UNREGISTERED );
     // payload_size
     for( i = 0; i <= length-255; i += 255 )
         bs_write( s, 8, 255 );
     bs_write( s, 8, length-i );
 
-    for( i = 0; i < 16; i++ )
-        bs_write( s, 8, uuid[i] );
-    for( i = 0; i < length-16; i++ )
-        bs_write( s, 8, version[i] );
+    for( int j = 0; j < 16; j++ )
+        bs_write( s, 8, uuid[j] );
+    for( int j = 0; j < length-16; j++ )
+        bs_write( s, 8, version[j] );
 
     bs_rbsp_trailing( s );
+    bs_flush( s );
 
     x264_free( opts );
     x264_free( version );
@@ -509,24 +578,79 @@ fail:
     return -1;
 }
 
+void x264_sei_buffering_period_write( x264_t *h, bs_t *s )
+{
+    x264_sps_t *sps = h->sps;
+    bs_realign( s );
+    uint8_t *p_start = x264_sei_write_header( s, SEI_BUFFERING_PERIOD );
+
+    bs_write_ue( s, sps->i_id );
+
+    if( sps->vui.b_nal_hrd_parameters_present )
+    {
+        bs_write( s, sps->vui.hrd.i_initial_cpb_removal_delay_length, h->initial_cpb_removal_delay );
+        bs_write( s, sps->vui.hrd.i_initial_cpb_removal_delay_length, h->initial_cpb_removal_delay_offset );
+    }
+
+    x264_sei_write( s, p_start );
+    bs_flush( s );
+}
+
+void x264_sei_pic_timing_write( x264_t *h, bs_t *s )
+{
+    x264_sps_t *sps = h->sps;
+    bs_realign( s );
+    uint8_t *p_start = x264_sei_write_header( s, SEI_PIC_TIMING );
+
+    if( sps->vui.b_nal_hrd_parameters_present || sps->vui.b_vcl_hrd_parameters_present )
+    {
+        bs_write( s, sps->vui.hrd.i_cpb_removal_delay_length, h->fenc->i_cpb_delay );
+        bs_write( s, sps->vui.hrd.i_dpb_output_delay_length, h->fenc->i_dpb_output_delay );
+    }
+
+    if( sps->vui.b_pic_struct_present )
+    {
+        bs_write( s, 4, h->fenc->i_pic_struct-1 ); // We use index 0 for "Auto"
+
+        // These clock timestamps are not standardised so we don't set them
+        // They could be time of origin, capture or alternative ideal display
+        for( int i = 0; i < num_clock_ts[h->fenc->i_pic_struct]; i++ )
+            bs_write1( s, 0 ); // clock_timestamp_flag
+    }
+
+    x264_sei_write( s, p_start );
+    bs_flush( s );
+}
+
+void x264_filler_write( x264_t *h, bs_t *s, int filler )
+{
+    bs_realign( s );
+
+    for( int i = 0; i < filler; i++ )
+        bs_write( s, 8, 0xff );
+
+    bs_rbsp_trailing( s );
+    bs_flush( s );
+}
+
 const x264_level_t x264_levels[] =
 {
-    { 10,   1485,    99,   152064,     64,    175,  64, 64,  0, 0, 0, 1 },
-//  {"1b",  1485,    99,   152064,    128,    350,  64, 64,  0, 0, 0, 1 },
-    { 11,   3000,   396,   345600,    192,    500, 128, 64,  0, 0, 0, 1 },
-    { 12,   6000,   396,   912384,    384,   1000, 128, 64,  0, 0, 0, 1 },
-    { 13,  11880,   396,   912384,    768,   2000, 128, 64,  0, 0, 0, 1 },
-    { 20,  11880,   396,   912384,   2000,   2000, 128, 64,  0, 0, 0, 1 },
-    { 21,  19800,   792,  1824768,   4000,   4000, 256, 64,  0, 0, 0, 0 },
-    { 22,  20250,  1620,  3110400,   4000,   4000, 256, 64,  0, 0, 0, 0 },
-    { 30,  40500,  1620,  3110400,  10000,  10000, 256, 32, 22, 0, 1, 0 },
-    { 31, 108000,  3600,  6912000,  14000,  14000, 512, 16, 60, 1, 1, 0 },
-    { 32, 216000,  5120,  7864320,  20000,  20000, 512, 16, 60, 1, 1, 0 },
-    { 40, 245760,  8192, 12582912,  20000,  25000, 512, 16, 60, 1, 1, 0 },
-    { 41, 245760,  8192, 12582912,  50000,  62500, 512, 16, 24, 1, 1, 0 },
-    { 42, 522240,  8704, 13369344,  50000,  62500, 512, 16, 24, 1, 1, 1 },
-    { 50, 589824, 22080, 42393600, 135000, 135000, 512, 16, 24, 1, 1, 1 },
-    { 51, 983040, 36864, 70778880, 240000, 240000, 512, 16, 24, 1, 1, 1 },
+    { 10,   1485,    99,   152064,     64,    175,  64, 64,  0, 2, 0, 0, 1 },
+//  {"1b",  1485,    99,   152064,    128,    350,  64, 64,  0, 2, 0, 0, 1 },
+    { 11,   3000,   396,   345600,    192,    500, 128, 64,  0, 2, 0, 0, 1 },
+    { 12,   6000,   396,   912384,    384,   1000, 128, 64,  0, 2, 0, 0, 1 },
+    { 13,  11880,   396,   912384,    768,   2000, 128, 64,  0, 2, 0, 0, 1 },
+    { 20,  11880,   396,   912384,   2000,   2000, 128, 64,  0, 2, 0, 0, 1 },
+    { 21,  19800,   792,  1824768,   4000,   4000, 256, 64,  0, 2, 0, 0, 0 },
+    { 22,  20250,  1620,  3110400,   4000,   4000, 256, 64,  0, 2, 0, 0, 0 },
+    { 30,  40500,  1620,  3110400,  10000,  10000, 256, 32, 22, 2, 0, 1, 0 },
+    { 31, 108000,  3600,  6912000,  14000,  14000, 512, 16, 60, 4, 1, 1, 0 },
+    { 32, 216000,  5120,  7864320,  20000,  20000, 512, 16, 60, 4, 1, 1, 0 },
+    { 40, 245760,  8192, 12582912,  20000,  25000, 512, 16, 60, 4, 1, 1, 0 },
+    { 41, 245760,  8192, 12582912,  50000,  62500, 512, 16, 24, 2, 1, 1, 0 },
+    { 42, 522240,  8704, 13369344,  50000,  62500, 512, 16, 24, 2, 1, 1, 1 },
+    { 50, 589824, 22080, 42393600, 135000, 135000, 512, 16, 24, 2, 1, 1, 1 },
+    { 51, 983040, 36864, 70778880, 240000, 240000, 512, 16, 24, 2, 1, 1, 1 },
     { 0 }
 };
 

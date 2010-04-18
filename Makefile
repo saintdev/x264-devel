@@ -6,32 +6,39 @@ all: default
 
 SRCS = common/mc.c common/predict.c common/pixel.c common/macroblock.c \
        common/frame.c common/dct.c common/cpu.c common/cabac.c \
-       common/common.c common/mdate.c common/set.c \
-       common/quant.c common/vlc.c \
+       common/common.c common/mdate.c common/rectangle.c \
+       common/set.c common/quant.c common/vlc.c \
        encoder/analyse.c encoder/me.c encoder/ratecontrol.c \
        encoder/set.c encoder/macroblock.c encoder/cabac.c \
        encoder/cavlc.c encoder/encoder.c encoder/lookahead.c
 
-SRCCLI = x264.c input/yuv.c input/y4m.c output/raw.c \
+SRCCLI = x264.c input/timecode.c \
+         input/yuv.c input/y4m.c output/raw.c \
          output/matroska.c output/matroska_ebml.c \
          output/flv.c output/flv_bytestream.c
 
-MUXERS := $(shell grep -E "(IN|OUT)PUT" config.h)
+SRCSO =
+
+CONFIG := $(shell cat config.h)
 
 # Optional muxer module sources
-ifneq ($(findstring VFW_INPUT, $(MUXERS)),)
-SRCCLI += input/vfw.c
-endif
-
-ifneq ($(findstring AVS_INPUT, $(MUXERS)),)
+ifneq ($(findstring AVS_INPUT, $(CONFIG)),)
 SRCCLI += input/avs.c
 endif
 
-ifneq ($(findstring HAVE_PTHREAD, $(CFLAGS)),)
+ifneq ($(findstring HAVE_PTHREAD, $(CONFIG)),)
 SRCCLI += input/thread.c
 endif
 
-ifneq ($(findstring MP4_OUTPUT, $(MUXERS)),)
+ifneq ($(findstring LAVF_INPUT, $(CONFIG)),)
+SRCCLI += input/lavf.c
+endif
+
+ifneq ($(findstring FFMS_INPUT, $(CONFIG)),)
+SRCCLI += input/ffms.c
+endif
+
+ifneq ($(findstring MP4_OUTPUT, $(CONFIG)),)
 SRCCLI += output/mp4.c
 endif
 
@@ -69,9 +76,11 @@ endif
 
 # AltiVec optims
 ifeq ($(ARCH),PPC)
+ifneq ($(AS),)
 SRCS += common/ppc/mc.c common/ppc/pixel.c common/ppc/dct.c \
         common/ppc/quant.c common/ppc/deblock.c \
         common/ppc/predict.c
+endif
 endif
 
 # NEON optims
@@ -101,8 +110,15 @@ ifneq ($(HAVE_GETOPT_LONG),1)
 SRCS += extras/getopt.c
 endif
 
+ifneq ($(SONAME),)
+ifeq ($(SYS),MINGW)
+SRCSO += x264dll.c
+endif
+endif
+
 OBJS = $(SRCS:%.c=%.o) $(CLSRCS:%.cl=%.o)
 OBJCLI = $(SRCCLI:%.c=%.o)
+OBJSO = $(SRCSO:%.c=%.o)
 DEP  = depend
 
 .PHONY: all default fprofiled clean distclean install uninstall dox test testclean
@@ -113,11 +129,11 @@ libx264.a: .depend $(OBJS) $(OBJASM)
 	$(AR) rc libx264.a $(OBJS) $(OBJASM)
 	$(RANLIB) libx264.a
 
-$(SONAME): .depend $(OBJS) $(OBJASM)
-	$(CC) -shared -o $@ $(OBJS) $(OBJASM) $(SOFLAGS) $(LDFLAGS)
+$(SONAME): .depend $(OBJS) $(OBJASM) $(OBJSO)
+	$(CC) -shared -o $@ $(OBJS) $(OBJASM) $(OBJSO) $(SOFLAGS) $(LDFLAGS)
 
-x264$(EXE): $(OBJCLI) libx264.a 
-	$(CC) -o $@ $+ $(LDFLAGS)
+x264$(EXE): $(OBJCLI) libx264.a
+	$(CC) -o $@ $+ $(LDFLAGS) $(LDFLAGSCLI)
 
 checkasm: tools/checkasm.o libx264.a
 	$(CC) -o $@ $+ $(LDFLAGS)
@@ -137,8 +153,8 @@ checkasm: tools/checkasm.o libx264.a
 	-rm $(@:%.o=%.e)
 
 .depend: config.mak
-	rm -f .depend
-	$(foreach SRC, $(SRCS) $(SRCCLI), $(CC) $(CFLAGS) $(ALTIVECFLAGS) $(SRC) -MT $(SRC:%.c=%.o) -MM -g0 1>> .depend;)
+	@rm -f .depend
+	@$(foreach SRC, $(SRCS) $(SRCCLI) $(SRCSO), $(CC) $(CFLAGS) $(SRC) -MT $(SRC:%.c=%.o) -MM -g0 1>> .depend;)
 
 config.mak:
 	./configure
@@ -179,13 +195,13 @@ fprofiled:
 endif
 
 clean:
-	rm -f $(OBJS) $(OBJASM) $(OBJCLI) $(SONAME) *.a x264 x264.exe .depend TAGS
+	rm -f $(OBJS) $(OBJASM) $(OBJCLI) $(OBJSO) $(SONAME) *.a x264 x264.exe .depend TAGS
 	rm -f checkasm checkasm.exe tools/checkasm.o tools/checkasm-a.o
 	rm -f $(SRC2:%.c=%.gcda) $(SRC2:%.c=%.gcno)
 	- sed -e 's/ *-fprofile-\(generate\|use\)//g' config.mak > config.mak2 && mv config.mak2 config.mak
 
 distclean: clean
-	rm -f config.mak config.h x264.pc
+	rm -f config.mak config.h config.log x264.pc
 	rm -rf test/
 
 install: x264$(EXE) $(SONAME)
@@ -206,7 +222,7 @@ endif
 
 uninstall:
 	rm -f $(DESTDIR)$(includedir)/x264.h $(DESTDIR)$(libdir)/libx264.a
-	rm -f $(DESTDIR)$(bindir)/x264 $(DESTDIR)$(libdir)/pkgconfig/x264.pc
+	rm -f $(DESTDIR)$(bindir)/x264$(EXE) $(DESTDIR)$(libdir)/pkgconfig/x264.pc
 	$(if $(SONAME), rm -f $(DESTDIR)$(libdir)/$(SONAME) $(DESTDIR)$(libdir)/libx264.$(SOSUFFIX))
 
 etags: TAGS

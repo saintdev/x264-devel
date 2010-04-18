@@ -105,7 +105,7 @@ fail:
 /* generate a filter sequence to try based on the filename extension */
 static void avs_build_filter_sequence( char *filename_ext, const char *filter[AVS_MAX_SEQUENCE+1] )
 {
-    int i=0, j;
+    int i = 0;
     const char *all_purpose[] = { "FFmpegSource2", "DSS2", "DirectShowSource", 0 };
     if( !strcasecmp( filename_ext, "avi" ) )
         filter[i++] = "AVISource";
@@ -113,11 +113,20 @@ static void avs_build_filter_sequence( char *filename_ext, const char *filter[AV
         filter[i++] = "MPEG2Source";
     if( !strcasecmp( filename_ext, "dga" ) )
         filter[i++] = "AVCSource";
-    for( j = 0; all_purpose[j] && i < AVS_MAX_SEQUENCE; j++ )
+    for( int j = 0; all_purpose[j] && i < AVS_MAX_SEQUENCE; j++ )
         filter[i++] = all_purpose[j];
 }
 
-static int open_file( char *psz_filename, hnd_t *p_handle, x264_param_t *p_param )
+static AVS_Value update_clip( avs_hnd_t *h, const AVS_VideoInfo **vi, AVS_Value res, AVS_Value release )
+{
+    h->func.avs_release_clip( h->clip );
+    h->clip = h->func.avs_take_clip( res, h->env );
+    h->func.avs_release_value( release );
+    *vi = h->func.avs_get_video_info( h->clip );
+    return res;
+}
+
+static int open_file( char *psz_filename, hnd_t *p_handle, video_info_t *info, cli_input_opt_t *opt )
 {
     FILE *fh = fopen( psz_filename, "r" );
     if( !fh )
@@ -175,7 +184,7 @@ static int open_file( char *psz_filename, hnd_t *p_handle, x264_param_t *p_param
         int i;
         for( i = 0; filter[i]; i++ )
         {
-            fprintf( stderr, "avs [info]: Trying %s... ", filter[i] );
+            fprintf( stderr, "avs [info]: trying %s... ", filter[i] );
             if( !h->func.avs_function_exists( h->env, filter[i] ) )
             {
                 fprintf( stderr, "not found\n" );
@@ -183,7 +192,7 @@ static int open_file( char *psz_filename, hnd_t *p_handle, x264_param_t *p_param
             }
             if( !strncasecmp( filter[i], "FFmpegSource", 12 ) )
             {
-                fprintf( stderr, "Indexing... " );
+                fprintf( stderr, "indexing... " );
                 fflush( stderr );
             }
             res = h->func.avs_invoke( h->env, filter[i], arg, NULL );
@@ -213,6 +222,20 @@ static int open_file( char *psz_filename, hnd_t *p_handle, x264_param_t *p_param
         fprintf( stderr, "avs [error]: `%s' has no video data\n", psz_filename );
         return -1;
     }
+    /* if the clip is made of fields instead of frames, call weave to make them frames */
+    if( avs_is_field_based( vi ) )
+    {
+        fprintf( stderr, "avs [warning]: detected fieldbased (separated) input, weaving to frames\n" );
+        AVS_Value tmp = h->func.avs_invoke( h->env, "Weave", res, NULL );
+        if( avs_is_error( tmp ) )
+        {
+            fprintf( stderr, "avs [error]: couldn't weave fields into frames\n" );
+            return -1;
+        }
+        res = update_clip( h, &vi, tmp, res );
+        info->interlaced = 1;
+        info->tff = avs_is_tff( vi );
+    }
     if( vi->width&1 || vi->height&1 )
     {
         fprintf( stderr, "avs [error]: input clip width or height not divisible by 2 (%dx%d)\n",
@@ -223,34 +246,27 @@ static int open_file( char *psz_filename, hnd_t *p_handle, x264_param_t *p_param
        as all planar colorspaces are flagged as YV12. If it is already YV12 in this case, the call does nothing */
     if( !avs_is_yv12( vi ) || avs_version >= AVS_INTERFACE_OTHER_PLANAR )
     {
-        h->func.avs_release_clip( h->clip );
         fprintf( stderr, "avs %s\n", !avs_is_yv12( vi ) ? "[warning]: converting input clip to YV12"
-               : "[info]: Avisynth 2.6+ detected, forcing conversion to YV12" );
+               : "[info]: avisynth 2.6+ detected, forcing conversion to YV12" );
         const char *arg_name[2] = { NULL, "interlaced" };
-        AVS_Value arg_arr[2] = { res, avs_new_value_bool( p_param->b_interlaced ) };
+        AVS_Value arg_arr[2] = { res, avs_new_value_bool( info->interlaced ) };
         AVS_Value res2 = h->func.avs_invoke( h->env, "ConvertToYV12", avs_new_value_array( arg_arr, 2 ), arg_name );
         if( avs_is_error( res2 ) )
         {
-            fprintf( stderr, "avs [error]: Couldn't convert input clip to YV12\n" );
+            fprintf( stderr, "avs [error]: couldn't convert input clip to YV12\n" );
             return -1;
         }
-        h->clip = h->func.avs_take_clip( res2, h->env );
-        h->func.avs_release_value( res2 );
-        vi = h->func.avs_get_video_info( h->clip );
+        res = update_clip( h, &vi, res2, res );
     }
     h->func.avs_release_value( res );
 
-    p_param->i_width = vi->width;
-    p_param->i_height = vi->height;
-    p_param->i_fps_num = vi->fps_numerator;
-    p_param->i_fps_den = vi->fps_denominator;
+    info->width = vi->width;
+    info->height = vi->height;
+    info->fps_num = vi->fps_numerator;
+    info->fps_den = vi->fps_denominator;
     h->num_frames = vi->num_frames;
-    p_param->i_csp = X264_CSP_YV12;
-
-    fprintf( stderr, "avs [info]: %dx%d @ %.2f fps (%d frames)\n",
-             p_param->i_width, p_param->i_height,
-             (double)p_param->i_fps_num / p_param->i_fps_den,
-             h->num_frames );
+    info->csp = X264_CSP_YV12;
+    info->vfr = 0;
 
     *p_handle = h;
     return 0;
@@ -267,6 +283,7 @@ static int picture_alloc( x264_picture_t *pic, int i_csp, int i_width, int i_hei
     pic->img.i_csp = i_csp;
     pic->img.i_plane = 3;
     pic->param = NULL;
+    pic->i_pic_struct = PIC_STRUCT_AUTO;
     return 0;
 }
 
@@ -276,16 +293,14 @@ static int read_frame( x264_picture_t *p_pic, hnd_t handle, int i_frame )
     avs_hnd_t *h = handle;
     if( i_frame >= h->num_frames )
         return -1;
-    AVS_VideoFrame *frm =
-    p_pic->opaque = h->func.avs_get_frame( h->clip, i_frame );
-    int i;
+    AVS_VideoFrame *frm = p_pic->opaque = h->func.avs_get_frame( h->clip, i_frame );
     const char *err = h->func.avs_clip_get_error( h->clip );
     if( err )
     {
         fprintf( stderr, "avs [error]: %s occurred while reading frame %d\n", err, i_frame );
         return -1;
     }
-    for( i = 0; i < 3; i++ )
+    for( int i = 0; i < 3; i++ )
     {
         /* explicitly cast away the const attribute to avoid a warning */
         p_pic->img.plane[i] = (uint8_t*)avs_get_read_ptr_p( frm, plane[i] );
@@ -317,4 +332,4 @@ static int close_file( hnd_t handle )
     return 0;
 }
 
-cli_input_t avs_input = { open_file, get_frame_total, picture_alloc, read_frame, release_frame, picture_clean, close_file };
+const cli_input_t avs_input = { open_file, get_frame_total, picture_alloc, read_frame, release_frame, picture_clean, close_file };
