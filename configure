@@ -13,7 +13,6 @@ echo "  --disable-ffms-input     disables ffmpegsource input"
 echo "  --disable-mp4-output     disables mp4 output (using gpac)"
 echo "  --disable-pthread        disables multithreaded encoding"
 echo "  --disable-asm            disables platform-specific assembly optimizations"
-echo "  --enable-opencl          enables OpenCL optimizations"
 echo "  --enable-debug           adds -g, doesn't strip"
 echo "  --enable-gprof           adds -pg, doesn't strip"
 echo "  --enable-visualize       enables visualization (X11 only)"
@@ -24,6 +23,7 @@ echo "  --extra-cflags=ECFLAGS   add ECFLAGS to CFLAGS"
 echo "  --extra-ldflags=ELDFLAGS add ELDFLAGS to LDFLAGS"
 echo "  --host=HOST              build programs to run on HOST"
 echo "  --cross-prefix=PREFIX    use PREFIX for compilation tools"
+echo "  --enable-opencl          enables opencl support"
 echo "  --sysroot=SYSROOT        root of cross-build tree"
 echo ""
 exit 1
@@ -95,12 +95,25 @@ as_check() {
     return $res
 }
 
-define() {
-    echo "#define $1$([ -n "$2" ] && echo " $2")" >> config.h
+perl_check() {
+    log_check "whether perl is present"
+    if $PERL -e "" >conftest.log 2>&1; then
+        res=$?
+        log_ok
+        else
+            res=$?
+            log_fail
+            log_msg "Failed commandline was:"
+            log_msg "--------------------------------------------------"
+            log_msg "$PERL -e \"\""
+            cat conftest.log >> config.log
+            log_msg "--------------------------------------------------"
+            fi
+            return $res
 }
 
-run_check() {
-    "$@" 2>$DEVNULL
+define() {
+    echo "#define $1$([ -n "$2" ] && echo " $2")" >> config.h
 }
 
 die() {
@@ -124,12 +137,12 @@ ffms_input="auto"
 mp4_output="auto"
 pthread="auto"
 asm="yes"
-opencl="no"
 debug="no"
 gprof="no"
 pic="no"
 vis="no"
 shared="no"
+opencl="no"
 
 CFLAGS="$CFLAGS -Wall -I."
 LDFLAGS="$LDFLAGS"
@@ -190,6 +203,12 @@ for opt do
         --disable-mp4-output)
             mp4_output="no"
             ;;
+        --enable-opencl)
+            opencl="auto"
+            ;;
+        --disable-opencl)
+            opencl="no"
+            ;;
         --extra-asflags=*)
             ASFLAGS="$ASFLAGS ${opt#--extra-asflags=}"
             ;;
@@ -204,9 +223,6 @@ for opt do
             ;;
         --disable-pthread)
             pthread="no"
-            ;;
-        --enable-opencl)
-            opencl="yes"
             ;;
         --enable-debug)
             debug="yes"
@@ -247,6 +263,7 @@ CC="${CC-${cross_prefix}gcc}"
 AR="${AR-${cross_prefix}ar}"
 RANLIB="${RANLIB-${cross_prefix}ranlib}"
 STRIP="${STRIP-${cross_prefix}strip}"
+PERL="${PERL-perl}"
 
 if [ "x$host" = x ]; then
     host=`./config.guess`
@@ -521,16 +538,6 @@ if test "$pthread" = "yes" ; then
     LDFLAGS="$LDFLAGS $libpthread"
 fi
 
-if [ "$opencl" = "yes" ] ; then
-    run_check perl -e "" || die "perl not found; required for OpenCL"
-    CFLAGS="$CFLAGS -DHAVE_OPENCL"
-    if [ "$SYS" = "MACOSX" ] ; then
-        LDFLAGS="$LDFLAGS -framework OpenCL"
-    else
-        LDFLAGS="$LDFLAGS -lOpenCL"
-    fi
-fi
-
 if cc_check "math.h" "-Werror" "return log2f(2);" ; then
     define HAVE_LOG2F
 fi
@@ -637,6 +644,19 @@ if [ "$avs_input" = "auto" ] ; then
     fi
 fi
 
+OPENCL_LDFLAGS="-lOpenCL"
+if [ $SYS = MACOSX ] ; then
+    OPENCL_LDFLAGS="-framework OpenCL"
+fi
+if [ "$opencl" = "auto" ] ; then
+    opencl="no"
+    if perl_check && cc_check CL/cl.h "${OPENCL_LDFLAGS}" ; then
+        opencl="yes"
+        define HAVE_OPENCL
+        LDFLAGS="${LDFLAGS} ${OPENCL_LDFLAGS}"
+    fi
+fi
+
 if [ "$pic" = "yes" ] ; then
     CFLAGS="$CFLAGS -fPIC"
     ASFLAGS="$ASFLAGS -DPIC"
@@ -692,8 +712,6 @@ EXE=$EXE
 VIS=$vis
 HAVE_GETOPT_LONG=$HAVE_GETOPT_LONG
 DEVNULL=$DEVNULL
-PERL=${PERL-perl}
-OPENCL=$opencl
 EOF
 
 if [ "$shared" = "yes" ]; then
@@ -756,6 +774,7 @@ echo >> config.log
 cat conftest.log >> config.log
 cat conftest.log
 rm conftest.log
+
 echo
 echo "You can run 'make' or 'make fprofiled' now."
 
