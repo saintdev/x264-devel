@@ -122,6 +122,10 @@ int x264_opencl_init( x264_t *h )
     if( !h->param.b_opencl )
         return 0;
 
+    /* FIXME: -We need to get a valid platform id to pass to CreateContextFromType instead of
+     *         passing a NULL. This works on most implementations, but is undefined, and can
+     *         break multi-platform systems.
+     */
     CHECK_CL( h->opencl.context = clCreateContextFromType( NULL, CL_DEVICE_TYPE_GPU, opencl_log, h, &err ) );
 
     // TODO: use device with max flops, and maybe create multiple queues to use multiple GPUs
