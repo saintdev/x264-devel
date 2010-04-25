@@ -31,8 +31,9 @@
 
 #define MAX_PYRAMID_STEPS 4
 
-typedef struct
+struct x264_opencl_t
 {
+    int             b_exit_thread;
     cl_context      context;
 
     cl_program      downsample_prog;
@@ -45,7 +46,11 @@ typedef struct
     // TODO: one per thread is safe, but Apple warns that having a command queue for
     // each thread may be more expensive than implementing locking on a single one
     cl_command_queue queue;
-} x264_opencl_t;
+
+    x264_synch_frame_list_t ifbuf;
+    x264_synch_frame_list_t next;
+    x264_synch_frame_list_t ofbuf;
+};
 
 typedef struct
 {
@@ -57,5 +62,6 @@ typedef struct
 
 int x264_opencl_init( x264_t *h );
 void x264_opencl_close( x264_t *h );
+void x264_opencl_put_frame( x264_t *h, x264_frame_t *frame );
 
 #endif

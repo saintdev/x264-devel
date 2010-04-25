@@ -345,13 +345,14 @@ static const int x264_scan8[16+2*4+3] =
 */
 
 typedef struct x264_ratecontrol_t   x264_ratecontrol_t;
+typedef struct x264_opencl_t    x264_opencl_t;
 
 struct x264_t
 {
     /* encoder parameters */
     x264_param_t    param;
 
-    x264_t          *thread[X264_THREAD_MAX+1];
+    x264_t          *thread[X264_THREAD_MAX+2];
     x264_pthread_t  thread_handle;
     int             b_thread_active;
     int             i_thread_phase; /* which thread to use for the next frame */
@@ -780,7 +781,7 @@ struct x264_t
     struct visualize_t *visualize;
 #endif
 #ifdef HAVE_OPENCL
-    x264_opencl_t   opencl;
+    x264_opencl_t   *opencl;
 #endif
     x264_lookahead_t *lookahead;
 };
