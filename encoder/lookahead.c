@@ -38,23 +38,6 @@
 #include "common/cpu.h"
 #include "analyse.h"
 
-static void x264_lookahead_shift( x264_synch_frame_list_t *dst, x264_synch_frame_list_t *src, int count )
-{
-    int i = count;
-    while( i-- )
-    {
-        assert( dst->i_size < dst->i_max_size );
-        assert( src->i_size );
-        dst->list[ dst->i_size++ ] = x264_frame_shift( src->list );
-        src->i_size--;
-    }
-    if( count )
-    {
-        x264_pthread_cond_broadcast( &dst->cv_fill );
-        x264_pthread_cond_broadcast( &src->cv_empty );
-    }
-}
-
 static void x264_lookahead_update_last_nonb( x264_t *h, x264_frame_t *new_nonb )
 {
     if( h->lookahead->last_nonb )
@@ -75,7 +58,7 @@ static void x264_lookahead_slicetype_decide( x264_t *h )
         x264_pthread_cond_wait( &h->lookahead->ofbuf.cv_empty, &h->lookahead->ofbuf.mutex );
 
     x264_pthread_mutex_lock( &h->lookahead->next.mutex );
-    x264_lookahead_shift( &h->lookahead->ofbuf, &h->lookahead->next, h->lookahead->next.list[0]->i_bframes + 1 );
+    x264_synch_frame_list_shift( &h->lookahead->ofbuf, &h->lookahead->next, h->lookahead->next.list[0]->i_bframes + 1 );
     x264_pthread_mutex_unlock( &h->lookahead->next.mutex );
 
     /* For MB-tree and VBV lookahead, we have to perform propagation analysis on I-frames too. */
@@ -97,7 +80,7 @@ static void x264_lookahead_thread( x264_t *h )
         x264_pthread_mutex_lock( &h->lookahead->ifbuf.mutex );
         x264_pthread_mutex_lock( &h->lookahead->next.mutex );
         shift = X264_MIN( h->lookahead->next.i_max_size - h->lookahead->next.i_size, h->lookahead->ifbuf.i_size );
-        x264_lookahead_shift( &h->lookahead->next, &h->lookahead->ifbuf, shift );
+        x264_synch_frame_list_shift( &h->lookahead->next, &h->lookahead->ifbuf, shift );
         x264_pthread_mutex_unlock( &h->lookahead->next.mutex );
         if( h->lookahead->next.i_size <= h->lookahead->i_slicetype_length )
         {
@@ -113,7 +96,7 @@ static void x264_lookahead_thread( x264_t *h )
     }   /* end of input frames */
     x264_pthread_mutex_lock( &h->lookahead->ifbuf.mutex );
     x264_pthread_mutex_lock( &h->lookahead->next.mutex );
-    x264_lookahead_shift( &h->lookahead->next, &h->lookahead->ifbuf, h->lookahead->ifbuf.i_size );
+    x264_synch_frame_list_shift( &h->lookahead->next, &h->lookahead->ifbuf, h->lookahead->ifbuf.i_size );
     x264_pthread_mutex_unlock( &h->lookahead->next.mutex );
     x264_pthread_mutex_unlock( &h->lookahead->ifbuf.mutex );
     while( h->lookahead->next.i_size )
@@ -231,7 +214,7 @@ void x264_lookahead_get_frames( x264_t *h )
 
         x264_stack_align( x264_slicetype_decide, h );
         x264_lookahead_update_last_nonb( h, h->lookahead->next.list[0] );
-        x264_lookahead_shift( &h->lookahead->ofbuf, &h->lookahead->next, h->lookahead->next.list[0]->i_bframes + 1 );
+        x264_synch_frame_list_shift( &h->lookahead->ofbuf, &h->lookahead->next, h->lookahead->next.list[0]->i_bframes + 1 );
 
         /* For MB-tree and VBV lookahead, we have to perform propagation analysis on I-frames too. */
         if( h->lookahead->b_analyse_keyframe && IS_X264_TYPE_I( h->lookahead->last_nonb->i_type ) )

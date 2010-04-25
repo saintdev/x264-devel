@@ -209,6 +209,7 @@ void          x264_frame_delete_list( x264_frame_t **list );
 int           x264_synch_frame_list_init( x264_synch_frame_list_t *slist, int nelem );
 void          x264_synch_frame_list_delete( x264_synch_frame_list_t *slist );
 void          x264_synch_frame_list_push( x264_synch_frame_list_t *slist, x264_frame_t *frame );
+void          x264_synch_frame_list_shift( x264_synch_frame_list_t *dst, x264_synch_frame_list_t *src, int count );
 
 #define x264_frame_sort_dts(list) x264_frame_sort(list, 1)
 #define x264_frame_sort_pts(list) x264_frame_sort(list, 0)

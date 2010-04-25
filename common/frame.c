@@ -1115,3 +1115,20 @@ void x264_synch_frame_list_push( x264_synch_frame_list_t *slist, x264_frame_t *f
     x264_pthread_mutex_unlock( &slist->mutex );
     x264_pthread_cond_broadcast( &slist->cv_fill );
 }
+
+void x264_synch_frame_list_shift( x264_synch_frame_list_t *dst, x264_synch_frame_list_t *src, int count )
+{
+    int i = count;
+    while( i-- )
+    {
+        assert( dst->i_size < dst->i_max_size );
+        assert( src->i_size );
+        dst->list[ dst->i_size++ ] = x264_frame_shift( src->list );
+        src->i_size--;
+    }
+    if( count )
+    {
+        x264_pthread_cond_broadcast( &dst->cv_fill );
+        x264_pthread_cond_broadcast( &src->cv_empty );
+    }
+}
