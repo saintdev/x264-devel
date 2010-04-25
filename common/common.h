@@ -88,12 +88,17 @@ do {\
 typedef union { uint16_t i; uint8_t  c[2]; } MAY_ALIAS x264_union16_t;
 typedef union { uint32_t i; uint16_t b[2]; uint8_t  c[4]; } MAY_ALIAS x264_union32_t;
 typedef union { uint64_t i; uint32_t a[2]; uint16_t b[4]; uint8_t c[8]; } MAY_ALIAS x264_union64_t;
+typedef struct { uint64_t i[2]; } x264_uint128_t;
+typedef union { x264_uint128_t i; uint64_t a[2]; uint32_t b[4]; uint16_t c[8]; uint8_t d[16]; } MAY_ALIAS x264_union128_t;
 #define M16(src) (((x264_union16_t*)(src))->i)
 #define M32(src) (((x264_union32_t*)(src))->i)
 #define M64(src) (((x264_union64_t*)(src))->i)
+#define M128(src) (((x264_union128_t*)(src))->i)
+#define M128_ZERO ((x264_uint128_t){{0,0}})
 #define CP16(dst,src) M16(dst) = M16(src)
 #define CP32(dst,src) M32(dst) = M32(src)
 #define CP64(dst,src) M64(dst) = M64(src)
+#define CP128(dst,src) M128(dst) = M128(src)
 
 #include "x264.h"
 #include "bs.h"
@@ -130,7 +135,7 @@ int x264_nal_encode( uint8_t *dst, x264_nal_t *nal, int b_annexb, int b_long_sta
 /* log */
 void x264_log( x264_t *h, int i_level, const char *psz_fmt, ... );
 
-void x264_reduce_fraction( int *n, int *d );
+void x264_reduce_fraction( uint32_t *n, uint32_t *d );
 void x264_init_vlc_tables();
 
 static ALWAYS_INLINE uint8_t x264_clip_uint8( int x )
@@ -182,6 +187,17 @@ static ALWAYS_INLINE uint16_t x264_cabac_mvd_sum( uint8_t *mvdleft, uint8_t *mvd
     amvd0 = (amvd0 > 2) + (amvd0 > 32);
     amvd1 = (amvd1 > 2) + (amvd1 > 32);
     return amvd0 + (amvd1<<8);
+}
+
+static void ALWAYS_INLINE x264_predictor_roundclip( int16_t (*mvc)[2], int i_mvc, int mv_x_min, int mv_x_max, int mv_y_min, int mv_y_max )
+{
+    for( int i = 0; i < i_mvc; i++ )
+    {
+        int mx = (mvc[i][0] + 2) >> 2;
+        int my = (mvc[i][1] + 2) >> 2;
+        mvc[i][0] = x264_clip3( mx, mv_x_min, mv_x_max );
+        mvc[i][1] = x264_clip3( my, mv_y_min, mv_y_max );
+    }
 }
 
 extern const uint8_t x264_exp2_lut[64];
@@ -332,7 +348,7 @@ static const int x264_scan8[16+2*4+3] =
     4+5*8,
 
     /* Chroma DC */
-    5+5*8, 6+5*8
+    6+5*8, 7+5*8
 };
 /*
    0 1 2 3 4 5 6 7
@@ -341,7 +357,7 @@ static const int x264_scan8[16+2*4+3] =
  2   B B   L L L L
  3         L L L L
  4   R R   L L L L
- 5   R R   DyDuDv
+ 5   R R   Dy  DuDv
 */
 
 typedef struct x264_ratecontrol_t   x264_ratecontrol_t;
@@ -563,7 +579,8 @@ struct x264_t
         int16_t (*mvr[2][32])[2];           /* 16x16 mv for each possible ref */
         int8_t  *skipbp;                    /* block pattern for SKIP or DIRECT (sub)mbs. B-frames + cabac only */
         int8_t  *mb_transform_size;         /* transform_size_8x8_flag of each mb */
-        uint8_t *intra_border_backup[2][3]; /* bottom pixels of the previous mb row, used for intra prediction after the framebuffer has been deblocked */
+        uint16_t *slice_table;              /* sh->first_mb of the slice that the indexed mb is part of
+                                             * NOTE: this will fail on resolutions above 2^16 MBs... */
 
          /* buffer for weighted versions of the reference frames */
         uint8_t *p_weight_buf[16];
@@ -719,7 +736,7 @@ struct x264_t
             int i_mb_count_ref[2][32];
             int i_mb_partition[17];
             int i_mb_cbp[6];
-            int i_mb_pred_mode[3][13];
+            int i_mb_pred_mode[4][13];
             /* Adaptive direct mv pred */
             int i_direct_score[2];
             /* Metrics */
@@ -747,7 +764,7 @@ struct x264_t
         int64_t i_mb_count_8x8dct[2];
         int64_t i_mb_count_ref[2][2][32];
         int64_t i_mb_cbp[6];
-        int64_t i_mb_pred_mode[3][13];
+        int64_t i_mb_pred_mode[4][13];
         /* */
         int     i_direct_score[2];
         int     i_direct_frames[2];
@@ -760,7 +777,9 @@ struct x264_t
     ALIGNED_16( uint16_t nr_offset[2][64] );
     uint32_t        nr_count[2];
 
+    /* Buffers that are allocated per-thread even in sliced threads. */
     void *scratch_buffer; /* for any temporary storage that doesn't want repeated malloc */
+    uint8_t *intra_border_backup[2][3]; /* bottom pixels of the previous mb row, used for intra prediction after the framebuffer has been deblocked */
 
     /* CPU functions dependents */
     x264_predict_t      predict_16x16[4+3];

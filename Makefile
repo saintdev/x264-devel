@@ -7,7 +7,7 @@ all: default
 SRCS = common/mc.c common/predict.c common/pixel.c common/macroblock.c \
        common/frame.c common/dct.c common/cpu.c common/cabac.c \
        common/common.c common/mdate.c common/rectangle.c \
-       common/set.c common/quant.c common/vlc.c \
+       common/set.c common/quant.c common/deblock.c common/vlc.c \
        encoder/analyse.c encoder/me.c encoder/ratecontrol.c \
        encoder/set.c encoder/macroblock.c encoder/cabac.c \
        encoder/cavlc.c encoder/encoder.c encoder/lookahead.c
@@ -107,7 +107,7 @@ CLSRCS  = common/opencl/downsample.cl common/opencl/simple_me.cl
 endif
 
 ifneq ($(HAVE_GETOPT_LONG),1)
-SRCS += extras/getopt.c
+SRCCLI += extras/getopt.c
 endif
 
 ifneq ($(SONAME),)
@@ -205,8 +205,10 @@ distclean: clean
 	rm -rf test/
 
 install: x264$(EXE) $(SONAME)
-	install -d $(DESTDIR)$(bindir) $(DESTDIR)$(includedir)
-	install -d $(DESTDIR)$(libdir) $(DESTDIR)$(libdir)/pkgconfig
+	install -d $(DESTDIR)$(bindir)
+	install -d $(DESTDIR)$(includedir)
+	install -d $(DESTDIR)$(libdir)
+	install -d $(DESTDIR)$(libdir)/pkgconfig
 	install -m 644 x264.h $(DESTDIR)$(includedir)
 	install -m 644 libx264.a $(DESTDIR)$(libdir)
 	install -m 644 x264.pc $(DESTDIR)$(libdir)/pkgconfig
@@ -215,7 +217,7 @@ install: x264$(EXE) $(SONAME)
 ifeq ($(SYS),MINGW)
 	$(if $(SONAME), install -m 755 $(SONAME) $(DESTDIR)$(bindir))
 else
-	$(if $(SONAME), ln -sf $(SONAME) $(DESTDIR)$(libdir)/libx264.$(SOSUFFIX))
+	$(if $(SONAME), ln -f -s $(SONAME) $(DESTDIR)$(libdir)/libx264.$(SOSUFFIX))
 	$(if $(SONAME), install -m 755 $(SONAME) $(DESTDIR)$(libdir))
 endif
 	$(if $(IMPLIBNAME), install -m 644 $(IMPLIBNAME) $(DESTDIR)$(libdir))
