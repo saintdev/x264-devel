@@ -110,7 +110,10 @@ typedef union { x264_uint128_t i; uint64_t a[2]; uint32_t b[4]; uint16_t c[8]; u
 #include "dct.h"
 #include "cabac.h"
 #include "quant.h"
-#include "gpu.h"
+#ifdef HAVE_OPENCL
+#include "opencl/opencl.h"
+#endif
+
 
 /****************************************************************************
  * General functions
@@ -361,7 +364,7 @@ static const int x264_scan8[16+2*4+3] =
 */
 
 typedef struct x264_ratecontrol_t   x264_ratecontrol_t;
-typedef struct x264_opencl_t    x264_opencl_t;
+typedef struct x264_opencl          x264_opencl_t;
 
 struct x264_t
 {
@@ -794,7 +797,6 @@ struct x264_t
     x264_zigzag_function_t zigzagf;
     x264_quant_function_t quantf;
     x264_deblock_function_t loopf;
-    x264_gpu_function_t   gpuf;
 
 #ifdef HAVE_VISUALIZE
     struct visualize_t *visualize;

@@ -31,9 +31,10 @@
 
 #define MAX_PYRAMID_STEPS 4
 
-struct x264_opencl_t
+struct x264_opencl
 {
     int             b_exit_thread;
+    int             b_thread_active;
     cl_context      context;
 
     cl_program      downsample_prog;
@@ -52,16 +53,18 @@ struct x264_opencl_t
     x264_synch_frame_list_t ofbuf;
 };
 
-typedef struct
+struct x264_opencl_frame
 {
     cl_mem      plane[3];
     cl_event    uploaded[3];    // clEnqueueWriteImage has completed
     cl_mem      lowres[MAX_PYRAMID_STEPS-1];
     cl_event    lowres_done[MAX_PYRAMID_STEPS-1];
-} x264_opencl_frame_t;
+};
 
-int x264_opencl_init( x264_t *h );
+int  x264_opencl_init( x264_t *h );
 void x264_opencl_close( x264_t *h );
 void x264_opencl_put_frame( x264_t *h, x264_frame_t *frame );
+int  x264_opencl_frame_new( struct x264_opencl *opencl, x264_frame_t *frame, int b_fdec );
+void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame );
 
 #endif

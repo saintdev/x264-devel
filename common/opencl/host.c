@@ -26,38 +26,46 @@
 #define CL_CHECK(...) { __VA_ARGS__; if ( err != CL_SUCCESS ) goto fail; }
 #define CLFLAGS "-cl-mad-enable -cl-strict-aliasing"
 
-static void opencl_frame_delete( x264_frame_t *frame )
+void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame )
 {
     int i;
     i = 0;
     for( i = 0; i < 3; i++ )
     {
-        clReleaseMemObject( frame->opencl.plane[i] );
-        clReleaseEvent( frame->opencl.uploaded[i] );
+        clReleaseMemObject( opencl_frame->plane[i] );
+        clReleaseEvent( opencl_frame->uploaded[i] );
     }
-    for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
-        clReleaseEvent( frame->opencl.lowres_done[i] );
+    for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ ) {
+        clReleaseMemObject( opencl_frame->lowres[i] );
+        clReleaseEvent( opencl_frame->lowres_done[i] );
+    }
+
+    x264_free( opencl_frame );
 }
 
-static int opencl_frame_new( x264_t *h, x264_frame_t *frame, int b_fdec )
+int x264_opencl_frame_new( x264_opencl_t *opencl, x264_frame_t *frame, int b_fdec )
 {
+    x264_opencl_frame_t *opencl_frame;
+    CHECKED_MALLOCZERO( opencl_frame, sizeof( *opencl_frame ) );
+    frame->opencl = opencl_frame;
     static const cl_image_format img_fmt = { CL_RGBA, CL_UNSIGNED_INT8 };
     cl_int err;
     int i;
 
-    if ( !b_fdec && h->frames.b_have_lowres )
+    if ( !b_fdec )
     {
-        // TODO: move this to x264_t
-        frame->delete = opencl_frame_delete;
-
+        /* TODO: According to nVidia docs CL_MEM_ALLOC_HOST_POINTER is best to use.
+         *       *BENCHMARK*
+         */
         for( i = 0; i < 3; i++ )
-            CL_CHECK( frame->opencl.plane[i] = clCreateImage2D( h->opencl.context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &img_fmt, frame->i_width[i] >> 2, frame->i_lines[i], frame->i_stride[i], frame->plane[i], &err ) );
+            CL_CHECK( opencl_frame->plane[i] = clCreateImage2D( opencl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &img_fmt, frame->i_width[i] >> 2, frame->i_lines[i], frame->i_stride[i], frame->plane[i], &err ) );
 
         for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
-            CL_CHECK( frame->opencl.lowres[i] = clCreateImage2D( h->opencl.context, CL_MEM_READ_WRITE, &img_fmt, frame->i_width[0] >> (3+i), frame->i_lines[0] >> (1+i), 0, NULL, &err ) );
+            CL_CHECK( opencl_frame->lowres[i] = clCreateImage2D( opencl->context, CL_MEM_READ_WRITE, &img_fmt, frame->i_width[0] >> (3+i), frame->i_lines[0] >> (1+i), 0, NULL, &err ) );
     }
 
     return 0;
+
 fail:
     return err;
 }
@@ -74,38 +82,60 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
 
     for( i = 0; i < 3; i++ )
     {
-        clReleaseEvent( fenc->opencl.uploaded[i] );
-        fenc->opencl.uploaded[i] = NULL;
+        clReleaseEvent( fenc->opencl->uploaded[i] );
+        fenc->opencl->uploaded[i] = (cl_event)NULL;
     }
     for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
     {
-        clReleaseEvent( fenc->opencl.lowres_done[i] );
-        fenc->opencl.lowres_done[i] = NULL;
+        clReleaseEvent( fenc->opencl->lowres_done[i] );
+        fenc->opencl->lowres_done[i] = NULL;
     }
 
     for( i = 0; i < 3; i++ )
     {
         const size_t region[3] = { fenc->i_width[i] >> 2, fenc->i_lines[i], 1 };
-        CL_CHECK( err = clEnqueueWriteImage( h->opencl.queue, fenc->opencl.plane[i], CL_FALSE, zero, region, fenc->i_stride[i], 0, fenc->plane[i], 0, NULL, &fenc->opencl.uploaded[i] ) );
+        CL_CHECK( err = clEnqueueWriteImage( h->opencl->queue, fenc->opencl->plane[i], CL_FALSE, zero, region, fenc->i_stride[i], 0, fenc->plane[i], 0, NULL, &fenc->opencl->uploaded[i] ) );
     }
 
     for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
     {
         const size_t work_size[2] = { fenc->i_width[0] >> (3+i), fenc->i_lines[0] >> (1+i) };
-        cl_mem   src      = i ? fenc->opencl.lowres[i-1]      : fenc->opencl.plane[0];
-        cl_event src_done = i ? fenc->opencl.lowres_done[i-1] : fenc->opencl.uploaded[0];
+        cl_mem   src      = i ? fenc->opencl->lowres[i-1]      : fenc->opencl->plane[0];
+        cl_event src_done = i ? fenc->opencl->lowres_done[i-1] : fenc->opencl->uploaded[0];
 
-        CL_CHECK( err = clSetKernelArg( h->opencl.downsample_kernel, 0, sizeof(cl_mem), &fenc->opencl.lowres[i] ) );
-        CL_CHECK( err = clSetKernelArg( h->opencl.downsample_kernel, 1, sizeof(cl_mem), &src ) );
-        CL_CHECK( err = clEnqueueNDRangeKernel( h->opencl.queue, h->opencl.downsample_kernel, 2, NULL, work_size, NULL, 1, &src_done, &fenc->opencl.lowres_done[i] ) );
+        CL_CHECK( err = clSetKernelArg( h->opencl->downsample_kernel, 0, sizeof(cl_mem), &fenc->opencl->lowres[i] ) );
+        CL_CHECK( err = clSetKernelArg( h->opencl->downsample_kernel, 1, sizeof(cl_mem), &src ) );
+        CL_CHECK( err = clEnqueueNDRangeKernel( h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, work_size, NULL, 1, &src_done, &fenc->opencl->lowres_done[i] ) );
 
-        CL_CHECK( err = clEnqueueReadImage( h->opencl.queue, fenc->opencl.lowres[i], CL_TRUE, zero, work_size, fenc->i_stride[0], 0, fenc->plane[0], 1, &fenc->opencl.lowres_done[i], NULL ) );
+        CL_CHECK( err = clEnqueueReadImage( h->opencl->queue, fenc->opencl->lowres[i], CL_TRUE, zero, work_size, fenc->i_stride[0], 0, fenc->plane[0], 1, &fenc->opencl->lowres_done[i], NULL ) );
     }
     return 0;
 fail:
     return err;
 }
 
+static void x264_opencl_thread( x264_t *h )
+{
+    int shift;
+    while( !h->opencl->b_exit_thread )
+    {
+        x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
+        while( !h->opencl->ifbuf.i_size && !h->opencl->b_exit_thread )
+            x264_pthread_cond_wait( &h->opencl->ifbuf.cv_fill, &h->opencl->ifbuf.mutex );
+        x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
+
+        x264_opencl_frame_upload( h, h->opencl->ifbuf.list[0] );
+
+        x264_pthread_mutex_lock( &h->opencl->ofbuf.mutex );
+        while( h->opencl->ofbuf.i_size == h->opencl->ofbuf.i_max_size )
+            x264_pthread_cond_wait( &h->opencl->ofbuf.cv_empty, &h->opencl->ofbuf.mutex );
+
+        x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
+        x264_synch_frame_list_shift( &h->opencl->ofbuf, &h->opencl->ifbuf, 1 );
+        x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
+        x264_pthread_mutex_unlock( &h->opencl->ofbuf.mutex );
+    }   /* end of input frames */
+}
 
 static void opencl_log( const char *errinfo, const void *priv, size_t cb, void *h )
 {
@@ -159,9 +189,6 @@ int x264_opencl_init( x264_t *h )
     CL_CHECK( err = clGetDeviceInfo( devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL ) );
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
 
-    h->gpuf.frame_new = opencl_frame_new;
-    h->gpuf.frame_upload = opencl_frame_upload;
-
     /* FIXME: Just using the same number of frames in our list as lookahead.
      *        This may not be optimal.
      */
@@ -179,11 +206,12 @@ int x264_opencl_init( x264_t *h )
     opencl->b_thread_active = 1;
 
     return 0;
+
 fail:
     x264_free( opencl );
     if( err != CL_SUCCESS )
         x264_log( h, X264_LOG_ERROR, "OpenCL error ID: %d", err );
-    return -1
+    return -1;
 }
 
 void x264_opencl_close( x264_t *h )
@@ -195,13 +223,13 @@ void x264_opencl_close( x264_t *h )
     x264_pthread_join( h->thread[h->param.i_threads + 1]->thread_handle, NULL );
     x264_free( h->thread[h->param.i_threads + 1] );
 
-    clReleaseKernel( h->opencl->me_simple );
+    clReleaseKernel( h->opencl->me_full );
     clReleaseKernel( h->opencl->me_pyramid );
     clReleaseProgram( h->opencl->simple_me_prog );
-    clReleaseKernel( h->opencl.downsample_kernel );
-    clReleaseProgram( h->opencl.downsample_prog );
-    clReleaseCommandQueue( h->opencl.queue );
-    clReleaseContext( h->opencl.context );
+    clReleaseKernel( h->opencl->downsample_kernel );
+    clReleaseProgram( h->opencl->downsample_prog );
+    clReleaseCommandQueue( h->opencl->queue );
+    clReleaseContext( h->opencl->context );
 
     x264_free( h->opencl );
 }
@@ -209,27 +237,4 @@ void x264_opencl_close( x264_t *h )
 void x264_opencl_put_frame( x264_t *h, x264_frame_t *frame )
 {
     x264_synch_frame_list_push( &h->opencl->ifbuf, frame );
-}
-
-static void x264_opencl_thread( x264_t *h )
-{
-    int shift;
-    while( !h->opencl->b_exit_thread )
-    {
-        x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
-        while( !h->opencl->ifbuf.i_size && !h->opencl->b_exit_thread )
-            x264_pthread_cond_wait( &h->opencl->ifbuf.cv_fill, &h->opencl->ifbuf.mutex );
-        x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
-
-        x264_opencl_frame_upload( h, h->opencl->ifbuf.list[0] );
-
-        x264_pthread_mutex_lock( &h->opencl->ofbuf.mutex );
-        while( h->opencl->ofbuf.i_size == h->opencl->ofbuf.i_max_size )
-            x264_pthread_cond_wait( &h->opencl->ofbuf.cv_empty, &h->opencl->ofbuf.mutex );
-
-        x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
-        x264_synch_frame_list_shift( &h->opencl->ofbuf, &h->openc->ifbuf, 1 );
-        x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
-        x264_pthread_mutex_unlock( &h->opencl->ofbuf.mutex );
-    }   /* end of input frames */
 }

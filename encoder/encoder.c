@@ -2194,9 +2194,11 @@ int     x264_encoder_encode( x264_t *h,
 
         fenc->i_frame = h->frames.i_input++;
 
+        /* FIXME: Where does this belong? We don't want to push the frame too early, but
+         *        we need to get this done before we call lowres_init.
+         */
         if( h->param.b_opencl )
-            if( h->gpuf.frame_upload( h, fenc ) )
-                return -1;
+            x264_opencl_put_frame( h, fenc );
 
         if( h->frames.i_bframe_delay && fenc->i_frame == h->frames.i_bframe_delay )
             h->frames.i_bframe_delay_time = fenc->i_pts;

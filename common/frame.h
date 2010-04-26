@@ -24,13 +24,11 @@
 #ifndef X264_FRAME_H
 #define X264_FRAME_H
 
-#ifdef HAVE_OPENCL
-#include "opencl/opencl.h"
-#endif
-
 /* number of pixels past the edge of the frame, for motion estimation/compensation */
 #define PADH 32
 #define PADV 32
+
+typedef struct x264_opencl_frame x264_opencl_frame_t;
 
 typedef struct x264_frame
 {
@@ -141,9 +139,8 @@ typedef struct x264_frame
     int     i_pir_start_col;
     int     i_pir_end_col;
 
-    void    (*delete)( struct x264_frame *frame ); /* to free GPU resources */
 #ifdef HAVE_OPENCL
-    x264_opencl_frame_t opencl;
+    x264_opencl_frame_t  *opencl;
 #endif
 } x264_frame_t;
 
