@@ -101,7 +101,7 @@ OBJASM  = $(ASMSRC:%.asm=%.o)
 endif
 
 # OpenCL optims
-ifeq ($(OPENCL),yes)
+ifneq ($(findstring HAVE_OPENCL, $(CONFIG)),)
 SRCS   += common/opencl/host.c
 CLSRCS  = common/opencl/downsample.cl common/opencl/simple_me.cl
 endif
@@ -148,7 +148,7 @@ checkasm: tools/checkasm.o libx264.a
 
 %.o: %.cl
 	$(CC) $(CFLAGS) -E -x c -o $(@:%.o=%.e) $<
-	$(PERL) ocl-cc.pl $(@:%.o=%.e)
+	$(PERL) ./ocl-cc.pl $(@:%.o=%.e)
 	$(CC) $(CFLAGS) -c -x c -o $@ $(@:%.o=%.e)
 	-rm $(@:%.o=%.e)
 
