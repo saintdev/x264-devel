@@ -230,10 +230,11 @@ kernel void me_pyramid(read_only image2d_t pix1, read_only image2d_t pix2,
      */
 }
 
-
+#if 0
 kernel void me_full(read_only image2d_t fenc, read_only image2d_t ref,
                     global int16_t *out)
 {
     int2 mb = (int2)(get_group_id(0), get_group_id(1));
     local
 }
+#endif
