@@ -23,7 +23,7 @@
 typedef unsigned short uint16_t;
 typedef short int16_t;
 
-const sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+constant sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
 #define COPY2_IF_LT(x,y,a,b)\
 if((y)<(x))\
@@ -127,7 +127,7 @@ uint vec_sad_unaligned( image2d_t fenc, image2d_t fref, int2 mb, int2 mv, int si
 }
 
 //__constant int2 diamond[2][2] =
-const int2 diamond[2][2] =
+constant int2 diamond[2][2] =
 {
     {(int2)(-1,0), (int2)(0, 1)},
     {(int2)( 1,0), (int2)(0,-1)}
@@ -139,7 +139,7 @@ const int2 diamond[2][2] =
 // mv must be in qpel
 uint mv_cost(int2 mv)
 {
-    float2 mvc_lg2 = native_log2(convert_float2((abs(mv)) + 1));
+    float2 mvc_lg2 = native_log2( convert_float2( abs( mv ) + (uint2)( 1 ) ) );
     float2 rounding = (float2)(!!mv.x, !!mv.y);
     uint2 mvc = convert_uint2(round(mvc_lg2 * 2.0f + 1.218f /*0.718f + .5f*/ + rounding));
     return LAMBDA * (mvc.x + mvc.y);
@@ -224,6 +224,10 @@ kernel void me_pyramid(read_only image2d_t pix1, read_only image2d_t pix2,
     }
 
     out[block.x + block.y*256] = mv.x;//min_mv[tid.y>>1][tid.x>>1].x;
+    /* This causes a compiler error with ATI's compiler.
+     *      error: write to < 32 bits via pointer not
+     *      allowed unless cl_khr_byte_addressable_store is enabled
+     */
 }
 
 
@@ -231,5 +235,5 @@ kernel void me_full(read_only image2d_t fenc, read_only image2d_t ref,
                     global int16_t *out)
 {
     int2 mb = (int2)(get_group_id(0), get_group_id(1));
-    local 
+    local
 }

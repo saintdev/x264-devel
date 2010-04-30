@@ -20,11 +20,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02111, USA.
  *****************************************************************************/
 
-const sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+constant sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
 static inline uint4 rnd_avg32( uint4 a, uint4 b )
 {
-    return (a | b) - (((a ^ b) & (uint4)(0xfefefefe)) >> 1);
+    return (a | b) - (((a ^ b) & (uint4)(0xfefefefe)) >> (uint4)(1));
 }
 
 #define FILTER(a,b,c,d) rhadd(rhadd(a,b), rhadd(c,d))
