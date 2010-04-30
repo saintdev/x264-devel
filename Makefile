@@ -148,7 +148,7 @@ checkasm: tools/checkasm.o libx264.a
 
 %.o: %.cl
 	$(CC) $(CFLAGS) -E -x c -o $(@:%.o=%.e) $<
-	$(PERL) ./ocl-cc.pl $(@:%.o=%.e)
+	$(PERL) tools/ocl-cc.pl $(@:%.o=%.e)
 	$(CC) $(CFLAGS) -c -x c -o $@ $(@:%.o=%.e)
 	-rm $(@:%.o=%.e)
 
