@@ -213,7 +213,7 @@ int x264_opencl_init( x264_t *h )
         goto fail;
     }
     CL_CHECK( opencl->me_pyramid, clCreateKernel, opencl->simple_me_prog, "me_pyramid", &err );
-    CL_CHECK( opencl->me_full, clCreateKernel, opencl->simple_me_prog, "me_full", &err );
+    CL_CHECK( opencl->simple_me, clCreateKernel, opencl->simple_me_prog, "simple_me", &err );
 
     clUnloadCompiler();
 
@@ -229,7 +229,7 @@ fail:
 
 void x264_opencl_close( x264_t *h )
 {
-    clReleaseKernel( h->opencl->me_full );
+    clReleaseKernel( h->opencl->simple_me );
     clReleaseKernel( h->opencl->me_pyramid );
     clReleaseProgram( h->opencl->simple_me_prog );
     clReleaseKernel( h->opencl->downsample_kernel );

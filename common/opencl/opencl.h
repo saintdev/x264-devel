@@ -41,7 +41,7 @@ struct x264_opencl
 
     cl_program      simple_me_prog;
     cl_kernel       me_pyramid;
-    cl_kernel       me_full;
+    cl_kernel       simple_me;
 
     // TODO: one per thread is safe, but Apple warns that having a command queue for
     // each thread may be more expensive than implementing locking on a single one
