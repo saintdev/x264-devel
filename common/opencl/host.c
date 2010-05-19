@@ -209,9 +209,7 @@ int x264_opencl_init( x264_t *h )
     h->opencl = opencl;
 
     CL_CHECK( err, x264_opencl_get_platform, h, &opencl->platform );
-    /* FIXME: Run only on CPU for now, this makes debugging kernels easier.
-     */
-    CL_CHECK( opencl->context, clCreateContextFromType, props, CL_DEVICE_TYPE_CPU, opencl_log, h, &err );
+    CL_CHECK( opencl->context, clCreateContextFromType, props, CL_DEVICE_TYPE_GPU, opencl_log, h, &err );
 
     // TODO: use device with max flops, and maybe create multiple queues to use multiple GPUs
     CL_CHECK( err, clGetContextInfo, opencl->context, CL_CONTEXT_DEVICES, sizeof(devices), devices, NULL );
