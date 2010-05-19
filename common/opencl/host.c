@@ -155,9 +155,6 @@ int x264_opencl_init( x264_t *h )
     cl_device_id devices[sizeof(cl_device_id) * 32];
     char device_name[1024];
 
-    if( !h->param.b_opencl )
-        goto fail;
-
     h->opencl = opencl;
 
     /* FIXME: -We need to get a valid platform id to pass to CreateContextFromType instead of
@@ -189,22 +186,6 @@ int x264_opencl_init( x264_t *h )
     CL_CHECK( err = clGetDeviceInfo( devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL ) );
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
 
-    /* FIXME: Just using the same number of frames in our list as lookahead.
-     *        This may not be optimal.
-     */
-    if( x264_synch_frame_list_init( &opencl->ifbuf, h->param.i_sync_lookahead+3 ) ||
-        x264_synch_frame_list_init( &opencl->next, h->frames.i_delay+3 ) ||
-        x264_synch_frame_list_init( &opencl->ofbuf, h->frames.i_delay+3 ) )
-        goto fail;
-
-    x264_t *opencl_h = h->thread[h->param.i_threads + 1];
-    *opencl_h = *h;
-
-    if( x264_pthread_create( &opencl_h->thread_handle, NULL, (void *)x264_opencl_thread, opencl_h ) )
-        goto fail;
-
-    opencl->b_thread_active = 1;
-
     return 0;
 
 fail:
@@ -216,13 +197,6 @@ fail:
 
 void x264_opencl_close( x264_t *h )
 {
-    x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
-    h->opencl->b_exit_thread = 1;
-    x264_pthread_cond_broadcast( &h->opencl->ifbuf.cv_fill );
-    x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
-    x264_pthread_join( h->thread[h->param.i_threads + 1]->thread_handle, NULL );
-    x264_free( h->thread[h->param.i_threads + 1] );
-
     clReleaseKernel( h->opencl->me_full );
     clReleaseKernel( h->opencl->me_pyramid );
     clReleaseProgram( h->opencl->simple_me_prog );
