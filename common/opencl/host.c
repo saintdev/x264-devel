@@ -187,7 +187,7 @@ int x264_opencl_init( x264_t *h )
     CL_CHECK( opencl->me_pyramid, clCreateKernel( opencl->simple_me_prog, "me_pyramid", &err ) );
     CL_CHECK( opencl->me_full, clCreateKernel, opencl->simple_me_prog, "me_full", &err ) );
 
-    CL_CHECK( err = clUnloadCompiler() );
+    clUnloadCompiler();
 
     CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL ) );
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
