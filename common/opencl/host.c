@@ -172,6 +172,22 @@ fail:
     return err;
 }
 
+static void x264_opencl_print_build_log( x264_t *h, cl_program program, cl_device_id device )
+{
+    cl_int err;
+    char *log;
+    size_t log_size;
+
+    CL_CHECK( err, clGetProgramBuildInfo, program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size );
+    CHECKED_MALLOC( log, log_size );
+    CL_CHECK( err, clGetProgramBuildInfo, program, device, CL_PROGRAM_BUILD_LOG, log_size, log, NULL );
+    x264_log( h, X264_LOG_ERROR, "%s\n", log );
+
+fail:
+    x264_free( log );
+    return;
+}
+
 // program sources
 extern const char *x264_opencl_downsample_src;
 extern const char *x264_opencl_simple_me_src;
@@ -198,14 +214,24 @@ int x264_opencl_init( x264_t *h )
 
     size = strlen(x264_opencl_downsample_src);
     CL_CHECK( opencl->downsample_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_downsample_src, &size, &err ) );
-    /* TODO: Print build log if compilation fails. */
-    CL_CHECK( err, clBuildProgram, opencl->downsample_prog, 0, NULL, CLFLAGS, NULL, NULL ) );
+    err = clBuildProgram( opencl->downsample_prog, 0, NULL, CLFLAGS, NULL, NULL );
+    if( err != CL_SUCCESS ) {
+        x264_log( h, X264_LOG_ERROR, "clBuildProgram( downsample ) failed with error ID: %d.\n", err );
+        if( err == CL_BUILD_PROGRAM_FAILURE )
+            x264_opencl_print_build_log( h, opencl->downsample_prog, devices[0] );
+        goto fail;
+    }
     CL_CHECK( opencl->downsample_kernel, clCreateKernel opencl->downsample_prog, "downsample_packed", &err ) );
 
     size = strlen(x264_opencl_simple_me_src);
     CL_CHECK( opencl->simple_me_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_simple_me_src, &size, &err ) );
-    /* TODO: Print build log if compilation fails. */
-    CL_CHECK( err, clBuildProgram, opencl->simple_me_prog, 0, NULL, CLFLAGS, NULL, NULL ) );
+    err = clBuildProgram( opencl->simple_me_prog, 0, NULL, CLFLAGS, NULL, NULL );
+    if( err != CL_SUCCESS ) {
+        x264_log( h, X264_LOG_ERROR, "clBuildProgram( simple_me ) failed with error ID: %d.\n", err );
+        if( err == CL_BUILD_PROGRAM_FAILURE )
+            x264_opencl_print_build_log( h, opencl->simple_me_prog, devices[0] );
+        goto fail;
+    }
     CL_CHECK( opencl->me_pyramid, clCreateKernel( opencl->simple_me_prog, "me_pyramid", &err ) );
     CL_CHECK( opencl->me_full, clCreateKernel, opencl->simple_me_prog, "me_full", &err ) );
 
