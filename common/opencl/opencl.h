@@ -58,7 +58,6 @@ struct x264_opencl_frame
 
 int  x264_opencl_init( x264_t *h );
 void x264_opencl_close( x264_t *h );
-void x264_opencl_put_frame( x264_t *h, x264_frame_t *frame );
 int  x264_opencl_frame_new( struct x264_opencl *opencl, x264_frame_t *frame, int b_fdec );
 void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame );
 
