@@ -224,7 +224,7 @@ int x264_opencl_init( x264_t *h )
             x264_opencl_print_build_log( h, opencl->downsample_prog, devices[0] );
         goto fail;
     }
-    CL_CHECK( opencl->downsample_kernel, clCreateKernel opencl->downsample_prog, "downsample_packed", &err );
+    CL_CHECK( opencl->downsample_kernel, clCreateKernel, opencl->downsample_prog, "downsample_packed", &err );
 
     size = strlen(x264_opencl_simple_me_src);
     CL_CHECK( opencl->simple_me_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_simple_me_src, &size, &err );
@@ -235,7 +235,7 @@ int x264_opencl_init( x264_t *h )
             x264_opencl_print_build_log( h, opencl->simple_me_prog, devices[0] );
         goto fail;
     }
-    CL_CHECK( opencl->me_pyramid, clCreateKernel( opencl->simple_me_prog, "me_pyramid", &err );
+    CL_CHECK( opencl->me_pyramid, clCreateKernel, opencl->simple_me_prog, "me_pyramid", &err );
     CL_CHECK( opencl->me_full, clCreateKernel, opencl->simple_me_prog, "me_full", &err );
 
     clUnloadCompiler();
