@@ -26,7 +26,7 @@
 #define CL_CHECK(ret,func,...) { \
     ret = func( __VA_ARGS__ ); \
     if ( err != CL_SUCCESS ) { \
-        x264_log( h, X264_LOG_ERROR, "%s failed with error ID: %d!", #func, err ); \
+        x264_log( h, X264_LOG_ERROR, "%s failed with error ID: %d!\n", #func, err ); \
         goto fail; \
     } \
 }
