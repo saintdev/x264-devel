@@ -64,10 +64,10 @@ int x264_opencl_frame_new( x264_opencl_t *opencl, x264_frame_t *frame, int b_fde
          *       *BENCHMARK*
          */
         for( i = 0; i < 3; i++ )
-            CL_CHECK( opencl_frame->plane[i], clCreateImage2D, opencl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &img_fmt, frame->i_width[i] >> 2, frame->i_lines[i], frame->i_stride[i], frame->plane[i], &err ) );
+            CL_CHECK( opencl_frame->plane[i], clCreateImage2D, opencl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &img_fmt, frame->i_width[i] >> 2, frame->i_lines[i], frame->i_stride[i], frame->plane[i], &err );
 
         for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
-            CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, opencl->context, CL_MEM_READ_WRITE, &img_fmt, frame->i_width[0] >> (3+i), frame->i_lines[0] >> (1+i), 0, NULL, &err ) );
+            CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, opencl->context, CL_MEM_READ_WRITE, &img_fmt, frame->i_width[0] >> (3+i), frame->i_lines[0] >> (1+i), 0, NULL, &err );
     }
 
     return 0;
@@ -100,7 +100,7 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
     for( i = 0; i < 3; i++ )
     {
         const size_t region[3] = { fenc->i_width[i] >> 2, fenc->i_lines[i], 1 };
-        CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, fenc->opencl->plane[i], CL_FALSE, zero, region, fenc->i_stride[i], 0, fenc->plane[i], 0, NULL, &fenc->opencl->uploaded[i] ) );
+        CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, fenc->opencl->plane[i], CL_FALSE, zero, region, fenc->i_stride[i], 0, fenc->plane[i], 0, NULL, &fenc->opencl->uploaded[i] );
     }
 
     for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
@@ -109,11 +109,11 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
         cl_mem   src      = i ? fenc->opencl->lowres[i-1]      : fenc->opencl->plane[0];
         cl_event src_done = i ? fenc->opencl->lowres_done[i-1] : fenc->opencl->uploaded[0];
 
-        CL_CHECK( err, clSetKernelArg, h->opencl->downsample_kernel, 0, sizeof(cl_mem), &fenc->opencl->lowres[i] ) );
-        CL_CHECK( err, clSetKernelArg, h->opencl->downsample_kernel, 1, sizeof(cl_mem), &src ) );
-        CL_CHECK( err, clEnqueueNDRangeKernel, h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, work_size, NULL, 1, &src_done, &fenc->opencl->lowres_done[i] ) );
+        CL_CHECK( err, clSetKernelArg, h->opencl->downsample_kernel, 0, sizeof(cl_mem), &fenc->opencl->lowres[i] );
+        CL_CHECK( err, clSetKernelArg, h->opencl->downsample_kernel, 1, sizeof(cl_mem), &src );
+        CL_CHECK( err, clEnqueueNDRangeKernel, h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, work_size, NULL, 1, &src_done, &fenc->opencl->lowres_done[i] );
 
-        CL_CHECK( err, clEnqueueReadImage, h->opencl->queue, fenc->opencl->lowres[i], CL_TRUE, zero, work_size, fenc->i_stride[0], 0, fenc->plane[0], 1, &fenc->opencl->lowres_done[i], NULL ) );
+        CL_CHECK( err, clEnqueueReadImage, h->opencl->queue, fenc->opencl->lowres[i], CL_TRUE, zero, work_size, fenc->i_stride[0], 0, fenc->plane[0], 1, &fenc->opencl->lowres_done[i], NULL );
     }
     return 0;
 fail:
@@ -206,14 +206,14 @@ int x264_opencl_init( x264_t *h )
     CL_CHECK( err, x264_opencl_get_platform, h, &opencl->platform );
     /* FIXME: Run only on CPU for now, this makes debugging kernels easier.
      */
-    CL_CHECK( opencl->context, clCreateContextFromType, NULL, CL_DEVICE_TYPE_CPU, opencl_log, h, &err ) );
+    CL_CHECK( opencl->context, clCreateContextFromType, NULL, CL_DEVICE_TYPE_CPU, opencl_log, h, &err );
 
     // TODO: use device with max flops, and maybe create multiple queues to use multiple GPUs
-    CL_CHECK( err, clGetContextInfo, opencl->context, CL_CONTEXT_DEVICES, sizeof(devices), devices, NULL ) );
-    CL_CHECK( opencl->queue, clCreateCommandQueue, opencl->context, devices[0], 0, &err ) );
+    CL_CHECK( err, clGetContextInfo, opencl->context, CL_CONTEXT_DEVICES, sizeof(devices), devices, NULL );
+    CL_CHECK( opencl->queue, clCreateCommandQueue, opencl->context, devices[0], 0, &err );
 
     size = strlen(x264_opencl_downsample_src);
-    CL_CHECK( opencl->downsample_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_downsample_src, &size, &err ) );
+    CL_CHECK( opencl->downsample_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_downsample_src, &size, &err );
     err = clBuildProgram( opencl->downsample_prog, 0, NULL, CLFLAGS, NULL, NULL );
     if( err != CL_SUCCESS ) {
         x264_log( h, X264_LOG_ERROR, "clBuildProgram( downsample ) failed with error ID: %d.\n", err );
@@ -221,10 +221,10 @@ int x264_opencl_init( x264_t *h )
             x264_opencl_print_build_log( h, opencl->downsample_prog, devices[0] );
         goto fail;
     }
-    CL_CHECK( opencl->downsample_kernel, clCreateKernel opencl->downsample_prog, "downsample_packed", &err ) );
+    CL_CHECK( opencl->downsample_kernel, clCreateKernel opencl->downsample_prog, "downsample_packed", &err );
 
     size = strlen(x264_opencl_simple_me_src);
-    CL_CHECK( opencl->simple_me_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_simple_me_src, &size, &err ) );
+    CL_CHECK( opencl->simple_me_prog, clCreateProgramWithSource, opencl->context, 1, &x264_opencl_simple_me_src, &size, &err );
     err = clBuildProgram( opencl->simple_me_prog, 0, NULL, CLFLAGS, NULL, NULL );
     if( err != CL_SUCCESS ) {
         x264_log( h, X264_LOG_ERROR, "clBuildProgram( simple_me ) failed with error ID: %d.\n", err );
@@ -232,12 +232,12 @@ int x264_opencl_init( x264_t *h )
             x264_opencl_print_build_log( h, opencl->simple_me_prog, devices[0] );
         goto fail;
     }
-    CL_CHECK( opencl->me_pyramid, clCreateKernel( opencl->simple_me_prog, "me_pyramid", &err ) );
-    CL_CHECK( opencl->me_full, clCreateKernel, opencl->simple_me_prog, "me_full", &err ) );
+    CL_CHECK( opencl->me_pyramid, clCreateKernel( opencl->simple_me_prog, "me_pyramid", &err );
+    CL_CHECK( opencl->me_full, clCreateKernel, opencl->simple_me_prog, "me_full", &err );
 
     clUnloadCompiler();
 
-    CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL ) );
+    CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL );
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
 
     return 0;
