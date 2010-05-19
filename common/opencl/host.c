@@ -120,29 +120,6 @@ fail:
     return err;
 }
 
-static void x264_opencl_thread( x264_t *h )
-{
-    int shift;
-    while( !h->opencl->b_exit_thread )
-    {
-        x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
-        while( !h->opencl->ifbuf.i_size && !h->opencl->b_exit_thread )
-            x264_pthread_cond_wait( &h->opencl->ifbuf.cv_fill, &h->opencl->ifbuf.mutex );
-        x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
-
-        x264_opencl_frame_upload( h, h->opencl->ifbuf.list[0] );
-
-        x264_pthread_mutex_lock( &h->opencl->ofbuf.mutex );
-        while( h->opencl->ofbuf.i_size == h->opencl->ofbuf.i_max_size )
-            x264_pthread_cond_wait( &h->opencl->ofbuf.cv_empty, &h->opencl->ofbuf.mutex );
-
-        x264_pthread_mutex_lock( &h->opencl->ifbuf.mutex );
-        x264_synch_frame_list_shift( &h->opencl->ofbuf, &h->opencl->ifbuf, 1 );
-        x264_pthread_mutex_unlock( &h->opencl->ifbuf.mutex );
-        x264_pthread_mutex_unlock( &h->opencl->ofbuf.mutex );
-    }   /* end of input frames */
-}
-
 static void opencl_log( const char *errinfo, const void *priv, size_t cb, void *h )
 {
     x264_log( h, X264_LOG_ERROR, "%s\n", errinfo );
@@ -261,9 +238,4 @@ void x264_opencl_close( x264_t *h )
     clReleaseContext( h->opencl->context );
 
     x264_free( h->opencl );
-}
-
-void x264_opencl_put_frame( x264_t *h, x264_frame_t *frame )
-{
-    x264_synch_frame_list_push( &h->opencl->ifbuf, frame );
 }
