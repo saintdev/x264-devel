@@ -148,6 +148,30 @@ static void opencl_log( const char *errinfo, const void *priv, size_t cb, void *
     x264_log( h, X264_LOG_ERROR, "%s\n", errinfo );
 }
 
+static cl_int x264_opencl_get_platform( x264_t *h, cl_platform_id *platform )
+{
+    cl_int err = CL_SUCCESS;
+    cl_uint count;
+
+    CL_CHECK( err, clGetPlatformIDs, 0, NULL, &count );
+    if( count > 0 )
+    {
+        cl_platform_id *platforms;
+        CHECKED_MALLOC( platforms, count * sizeof( *platforms ) );
+        CL_CHECK( err, clGetPlatformIDs, count, platforms, NULL );
+        /* TODO: Intelligently select the best (all?) platform */
+        *platform = platforms[0];
+        x264_free( platforms );
+    }
+    else
+        goto fail;
+
+    return CL_SUCCESS;
+
+fail:
+    return err;
+}
+
 // program sources
 extern const char *x264_opencl_downsample_src;
 extern const char *x264_opencl_simple_me_src;
@@ -163,10 +187,8 @@ int x264_opencl_init( x264_t *h )
 
     h->opencl = opencl;
 
-    /* FIXME: -We need to get a valid platform id to pass to CreateContextFromType instead of
-     *         passing a NULL. This works on most implementations, but is undefined, and can
-     *         break multi-platform systems.
-     *        -Run only on CPU for now, this makes debugging kernels easier.
+    CL_CHECK( err, x264_opencl_get_platform, h, &opencl->platform );
+    /* FIXME: Run only on CPU for now, this makes debugging kernels easier.
      */
     CL_CHECK( opencl->context, clCreateContextFromType, NULL, CL_DEVICE_TYPE_CPU, opencl_log, h, &err ) );
 

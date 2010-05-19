@@ -35,6 +35,7 @@ struct x264_opencl
 {
     int             b_exit_thread;
     int             b_thread_active;
+    cl_platform_id  platform;
     cl_context      context;
 
     cl_program      downsample_prog;
