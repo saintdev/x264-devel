@@ -85,15 +85,21 @@ typedef struct x264_frame
     int8_t  *mb_type;
     uint8_t *mb_partition;
     int16_t (*mv[2])[2];
+    int16_t (*mv16x16)[2];
     int16_t (*lowres_mvs[2][X264_BFRAME_MAX+1])[2];
+
+    /* Stored as (lists_used << LOWRES_COST_SHIFT) + (cost).
+     * Doesn't need special addressing for intra cost because
+     * lists_used is guaranteed to be zero in that cast. */
     uint16_t (*lowres_costs[X264_BFRAME_MAX+2][X264_BFRAME_MAX+2]);
-    /* Actually a width-2 bitfield with 4 values per uint8_t. */
-    uint8_t  (*lowres_inter_types[X264_BFRAME_MAX+2][X264_BFRAME_MAX+2]);
+    #define LOWRES_COST_MASK ((1<<14)-1)
+    #define LOWRES_COST_SHIFT 14
+
     int     *lowres_mv_costs[2][X264_BFRAME_MAX+1];
     int8_t  *ref[2];
     int     i_ref[2];
     int     ref_poc[2][16];
-    int16_t inv_ref_poc[2][32]; // inverse values (list0 only) to avoid divisions in MB encoding
+    int16_t inv_ref_poc[2]; // inverse values of ref0 poc to avoid divisions in temporal MV prediction
 
     /* for adaptive B-frame decision.
      * contains the SATD cost of the lowres frame encoded in various modes
@@ -105,7 +111,7 @@ typedef struct x264_frame
     int     *i_row_satds[X264_BFRAME_MAX+2][X264_BFRAME_MAX+2];
     int     *i_row_satd;
     int     *i_row_bits;
-    int     *i_row_qp;
+    float   *f_row_qp;
     float   *f_qp_offset;
     float   *f_qp_offset_aq;
     int     b_intra_calculated;
@@ -138,6 +144,7 @@ typedef struct x264_frame
     float   f_pir_position;
     int     i_pir_start_col;
     int     i_pir_end_col;
+    int     i_frames_since_pir;
 
 #ifdef HAVE_OPENCL
     x264_opencl_frame_t  *opencl;

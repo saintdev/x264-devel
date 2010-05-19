@@ -110,6 +110,7 @@ typedef union { x264_uint128_t i; uint64_t a[2]; uint32_t b[4]; uint16_t c[8]; u
 #include "dct.h"
 #include "cabac.h"
 #include "quant.h"
+#include "cpu.h"
 #ifdef HAVE_OPENCL
 #include "opencl/opencl.h"
 #endif
@@ -192,14 +193,14 @@ static ALWAYS_INLINE uint16_t x264_cabac_mvd_sum( uint8_t *mvdleft, uint8_t *mvd
     return amvd0 + (amvd1<<8);
 }
 
-static void ALWAYS_INLINE x264_predictor_roundclip( int16_t (*mvc)[2], int i_mvc, int mv_x_min, int mv_x_max, int mv_y_min, int mv_y_max )
+static void ALWAYS_INLINE x264_predictor_roundclip( int16_t (*dst)[2], int16_t (*mvc)[2], int i_mvc, int mv_x_min, int mv_x_max, int mv_y_min, int mv_y_max )
 {
     for( int i = 0; i < i_mvc; i++ )
     {
         int mx = (mvc[i][0] + 2) >> 2;
         int my = (mvc[i][1] + 2) >> 2;
-        mvc[i][0] = x264_clip3( mx, mv_x_min, mv_x_max );
-        mvc[i][1] = x264_clip3( my, mv_y_min, mv_y_max );
+        dst[i][0] = x264_clip3( mx, mv_x_min, mv_x_max );
+        dst[i][1] = x264_clip3( my, mv_y_min, mv_y_max );
     }
 }
 
@@ -411,6 +412,8 @@ struct x264_t
                                      * since last buffering_period SEI */
     int             i_coded_fields_lookahead; /* Use separate counters for lookahead */
     int             i_cpb_delay_lookahead;
+
+    int             b_queued_intra_refresh;
 
     /* We use only one SPS and one PPS */
     x264_sps_t      sps_array[1];
@@ -663,7 +666,7 @@ struct x264_t
             ALIGNED_8( int8_t intra4x4_pred_mode[X264_SCAN8_LUMA_SIZE] );
 
             /* i_non_zero_count if available else 0x80 */
-            ALIGNED_4( uint8_t non_zero_count[X264_SCAN8_SIZE] );
+            ALIGNED_16( uint8_t non_zero_count[X264_SCAN8_SIZE] );
 
             /* -1 if unused, -2 if unavailable */
             ALIGNED_4( int8_t ref[2][X264_SCAN8_LUMA_SIZE] );

@@ -22,7 +22,6 @@
  *****************************************************************************/
 
 #include "common.h"
-#include "cpu.h"
 
 #include <stdarg.h>
 #include <ctype.h>
@@ -1227,11 +1226,11 @@ char *x264_param2string( x264_param_t *p, int b_res )
     s += sprintf( s, " bframes=%d", p->i_bframe );
     if( p->i_bframe )
     {
-        s += sprintf( s, " b_pyramid=%d b_adapt=%d b_bias=%d direct=%d wpredb=%d",
+        s += sprintf( s, " b_pyramid=%d b_adapt=%d b_bias=%d direct=%d weightb=%d",
                       p->i_bframe_pyramid, p->i_bframe_adaptive, p->i_bframe_bias,
                       p->analyse.i_direct_mv_pred, p->analyse.b_weighted_bipred );
     }
-    s += sprintf( s, " wpredp=%d", p->analyse.i_weighted_pred > 0 ? p->analyse.i_weighted_pred : 0 );
+    s += sprintf( s, " weightp=%d", p->analyse.i_weighted_pred > 0 ? p->analyse.i_weighted_pred : 0 );
 
     s += sprintf( s, " keyint=%d keyint_min=%d scenecut=%d intra_refresh=%d",
                   p->i_keyint_max, p->i_keyint_min, p->i_scenecut_threshold, p->b_intra_refresh );
@@ -1240,7 +1239,7 @@ char *x264_param2string( x264_param_t *p, int b_res )
         s += sprintf( s, " rc_lookahead=%d", p->rc.i_lookahead );
 
     s += sprintf( s, " rc=%s mbtree=%d", p->rc.i_rc_method == X264_RC_ABR ?
-                               ( p->rc.b_stat_read ? "2pass" : p->rc.i_vbv_buffer_size == p->rc.i_bitrate ? "cbr" : "abr" )
+                               ( p->rc.b_stat_read ? "2pass" : p->rc.i_vbv_max_bitrate == p->rc.i_bitrate ? "cbr" : "abr" )
                                : p->rc.i_rc_method == X264_RC_CRF ? "crf" : "cqp", p->rc.b_mb_tree );
     if( p->rc.i_rc_method == X264_RC_ABR || p->rc.i_rc_method == X264_RC_CRF )
     {
@@ -1259,7 +1258,7 @@ char *x264_param2string( x264_param_t *p, int b_res )
             s += sprintf( s, " vbv_maxrate=%d vbv_bufsize=%d",
                           p->rc.i_vbv_max_bitrate, p->rc.i_vbv_buffer_size );
             if( p->rc.i_rc_method == X264_RC_CRF )
-                s += sprintf( s, " crf-max=%.1f", p->rc.f_rf_constant_max );
+                s += sprintf( s, " crf_max=%.1f", p->rc.f_rf_constant_max );
         }
     }
     else if( p->rc.i_rc_method == X264_RC_CQP )

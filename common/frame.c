@@ -105,6 +105,7 @@ x264_frame_t *x264_frame_new( x264_t *h, int b_fdec )
         CHECKED_MALLOC( frame->mb_type, i_mb_count * sizeof(int8_t));
         CHECKED_MALLOC( frame->mb_partition, i_mb_count * sizeof(uint8_t));
         CHECKED_MALLOC( frame->mv[0], 2*16 * i_mb_count * sizeof(int16_t) );
+        CHECKED_MALLOC( frame->mv16x16, 2*i_mb_count * sizeof(int16_t) );
         CHECKED_MALLOC( frame->ref[0], 4 * i_mb_count * sizeof(int8_t) );
         if( h->param.i_bframe )
         {
@@ -117,7 +118,7 @@ x264_frame_t *x264_frame_new( x264_t *h, int b_fdec )
             frame->ref[1] = NULL;
         }
         CHECKED_MALLOC( frame->i_row_bits, i_lines/16 * sizeof(int) );
-        CHECKED_MALLOC( frame->i_row_qp, i_lines/16 * sizeof(int) );
+        CHECKED_MALLOC( frame->f_row_qp, i_lines/16 * sizeof(float) );
         if( h->param.analyse.i_me_method >= X264_ME_ESA )
         {
             CHECKED_MALLOC( frame->buffer[3],
@@ -148,10 +149,7 @@ x264_frame_t *x264_frame_new( x264_t *h, int b_fdec )
             CHECKED_MALLOC( frame->i_propagate_cost, (i_mb_count+3) * sizeof(uint16_t) );
             for( int j = 0; j <= h->param.i_bframe+1; j++ )
                 for( int i = 0; i <= h->param.i_bframe+1; i++ )
-                {
                     CHECKED_MALLOC( frame->lowres_costs[j][i], (i_mb_count+3) * sizeof(uint16_t) );
-                    CHECKED_MALLOC( frame->lowres_inter_types[j][i], (i_mb_count+3)/4 * sizeof(uint8_t) );
-                }
             frame->i_intra_cost = frame->lowres_costs[0][0];
             memset( frame->i_intra_cost, -1, (i_mb_count+3) * sizeof(uint16_t) );
         }
@@ -203,19 +201,17 @@ void x264_frame_delete( x264_frame_t *frame )
         x264_free( frame->i_propagate_cost );
         for( int j = 0; j <= X264_BFRAME_MAX+1; j++ )
             for( int i = 0; i <= X264_BFRAME_MAX+1; i++ )
-            {
                 x264_free( frame->lowres_costs[j][i] );
-                x264_free( frame->lowres_inter_types[j][i] );
-            }
         x264_free( frame->f_qp_offset );
         x264_free( frame->f_qp_offset_aq );
         x264_free( frame->i_inv_qscale_factor );
         x264_free( frame->i_row_bits );
-        x264_free( frame->i_row_qp );
+        x264_free( frame->f_row_qp );
         x264_free( frame->mb_type );
         x264_free( frame->mb_partition );
         x264_free( frame->mv[0] );
         x264_free( frame->mv[1] );
+        x264_free( frame->mv16x16 );
         x264_free( frame->ref[0] );
         x264_free( frame->ref[1] );
         x264_pthread_mutex_destroy( &frame->mutex );
@@ -231,7 +227,7 @@ int x264_frame_copy_picture( x264_t *h, x264_frame_t *dst, x264_picture_t *src )
     int i_csp = src->img.i_csp & X264_CSP_MASK;
     if( i_csp != X264_CSP_I420 && i_csp != X264_CSP_YV12 )
     {
-        x264_log( h, X264_LOG_ERROR, "Arg invalid CSP\n" );
+        x264_log( h, X264_LOG_ERROR, "Invalid input colorspace\n" );
         return -1;
     }
 
@@ -252,6 +248,11 @@ int x264_frame_copy_picture( x264_t *h, x264_frame_t *dst, x264_picture_t *src )
         {
             plane += (height-1)*stride;
             stride = -stride;
+        }
+        if( width > abs(stride) )
+        {
+            x264_log( h, X264_LOG_ERROR, "Input picture width is greater than stride\n" );
+            return -1;
         }
         h->mc.plane_copy( dst->plane[i], dst->i_stride[i], plane, stride, width, height );
     }

@@ -48,8 +48,8 @@ static const uint8_t subpel_iterations[][4] =
 /* (x-1)%6 */
 static const uint8_t mod6m1[8] = {5,0,1,2,3,4,5,0};
 /* radius 2 hexagon. repeated entries are to avoid having to compute mod6 every time. */
-static const int hex2[8][2] = {{-1,-2}, {-2,0}, {-1,2}, {1,2}, {2,0}, {1,-2}, {-1,-2}, {-2,0}};
-static const int square1[9][2] = {{0,0}, {0,-1}, {0,1}, {-1,0}, {1,0}, {-1,-1}, {-1,1}, {1,-1}, {1,1}};
+static const int8_t hex2[8][2] = {{-1,-2}, {-2,0}, {-1,2}, {1,2}, {2,0}, {1,-2}, {-1,-2}, {-2,0}};
+static const int8_t square1[9][2] = {{0,0}, {0,-1}, {0,1}, {-1,0}, {1,0}, {-1,-1}, {-1,1}, {1,-1}, {1,1}};
 
 static void refine_subpel( x264_t *h, x264_me_t *m, int hpel_iters, int qpel_iters, int *p_halfpel_thresh, int b_refine_qpel );
 
@@ -245,14 +245,15 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
         pmv = pack16to32_mask( bmx, bmy );
         if( i_mvc > 0 )
         {
-            x264_predictor_roundclip( mvc, i_mvc, mv_x_min, mv_x_max, mv_y_min, mv_y_max );
+            ALIGNED_ARRAY_8( int16_t, mvc_fpel,[16][2] );
+            x264_predictor_roundclip( mvc_fpel, mvc, i_mvc, mv_x_min, mv_x_max, mv_y_min, mv_y_max );
             bcost <<= 4;
             for( int i = 1; i <= i_mvc; i++ )
             {
-                if( M32( mvc[i-1] ) && (pmv != M32( mvc[i-1] )) )
+                if( M32( mvc_fpel[i-1] ) && (pmv != M32( mvc[i-1] )) )
                 {
-                    int mx = mvc[i-1][0];
-                    int my = mvc[i-1][1];
+                    int mx = mvc_fpel[i-1][0];
+                    int my = mvc_fpel[i-1][1];
                     int cost = h->pixf.fpelcmp[i_pixel]( p_fenc, FENC_STRIDE, &p_fref_w[my*stride+mx], stride ) + BITS_MVD( mx, my );
                     cost = (cost << 4) + i;
                     COPY1_IF_LT( bcost, cost );
@@ -260,8 +261,8 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
             }
             if( bcost&15 )
             {
-                bmx = mvc[(bcost&15)-1][0];
-                bmy = mvc[(bcost&15)-1][1];
+                bmx = mvc_fpel[(bcost&15)-1][0];
+                bmy = mvc_fpel[(bcost&15)-1][1];
             }
             bcost >>= 4;
         }
@@ -376,7 +377,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
             /* Uneven-cross Multi-Hexagon-grid Search
              * as in JM, except with different early termination */
 
-            static const int x264_pixel_size_shift[7] = { 0, 1, 1, 2, 3, 3, 4 };
+            static const uint8_t x264_pixel_size_shift[7] = { 0, 1, 1, 2, 3, 3, 4 };
 
             int ucost1, ucost2;
             int cross_start = 1;
@@ -423,7 +424,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
                 /* range multipliers based on casual inspection of some statistics of
                  * average distance between current predictor and final mv found by ESA.
                  * these have not been tuned much by actual encoding. */
-                static const int range_mul[4][4] =
+                static const uint8_t range_mul[4][4] =
                 {
                     { 3, 3, 4, 4 },
                     { 3, 4, 4, 4 },
@@ -467,7 +468,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
                         : mvd < 20*denom ? 1
                         : mvd < 40*denom ? 2 : 3;
 
-                i_me_range = i_me_range * range_mul[mvd_ctx][sad_ctx] / 4;
+                i_me_range = i_me_range * range_mul[mvd_ctx][sad_ctx] >> 2;
             }
 
             /* FIXME if the above DIA2/OCT2/CROSS found a new mv, it has not updated omx/omy.
@@ -483,7 +484,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
             int i = 1;
             do
             {
-                static const int hex4[16][2] = {
+                static const int8_t hex4[16][2] = {
                     { 0,-4}, { 0, 4}, {-2,-3}, { 2,-3},
                     {-4,-2}, { 4,-2}, {-4,-1}, { 4,-1},
                     {-4, 0}, { 4, 0}, {-4, 1}, { 4, 1},
@@ -657,7 +658,7 @@ void x264_me_search_ref( x264_t *h, x264_me_t *m, int16_t (*mvc)[2], int i_mvc, 
                     bsad += ycost;
                 }
 
-                limit = i_me_range / 2;
+                limit = i_me_range >> 1;
                 sad_thresh = bsad*sad_thresh>>3;
                 while( nmvsad > limit*2 && sad_thresh > bsad )
                 {
@@ -913,14 +914,14 @@ static void refine_subpel( x264_t *h, x264_me_t *m, int hpel_iters, int qpel_ite
     m->cost_mv = p_cost_mvx[bmx] + p_cost_mvy[bmy];
 }
 
-#define BIME_CACHE( dx, dy, list ) \
-{ \
+#define BIME_CACHE( dx, dy, list )\
+{\
     x264_me_t *m = m##list;\
-    int i = 4 + 3*dx + dy; \
+    int i = 4 + 3*dx + dy;\
     int mvx = bm##list##x+dx;\
     int mvy = bm##list##y+dy;\
     stride[list][i] = bw;\
-    src[list][i] = h->mc.get_ref( pixy_buf[list][i], &stride[list][i], m->p_fref, m->i_stride[0], mvx, mvy, bw, bh, weight_none ); \
+    src[list][i] = h->mc.get_ref( pixy_buf[list][i], &stride[list][i], m->p_fref, m->i_stride[0], mvx, mvy, bw, bh, weight_none );\
     if( rd )\
     {\
         h->mc.mc_chroma( pixu_buf[list][i], 8, m->p_fref[4], m->i_stride[1], mvx, mvy + mv##list##y_offset, bw>>1, bh>>1 );\
@@ -1106,11 +1107,11 @@ void x264_me_refine_bidir_rd( x264_t *h, x264_me_t *m0, x264_me_t *m1, int i_wei
     { \
         uint64_t cost; \
         M32( cache_mv ) = pack16to32_mask(mx,my); \
-        if( m->i_pixel <= PIXEL_8x8 )\
-        {\
-            h->mc.mc_chroma( pixu, FDEC_STRIDE, m->p_fref[4], m->i_stride[1], mx, my + mvy_offset, bw>>1, bh>>1 );\
-            h->mc.mc_chroma( pixv, FDEC_STRIDE, m->p_fref[5], m->i_stride[1], mx, my + mvy_offset, bw>>1, bh>>1 );\
-        }\
+        if( m->i_pixel <= PIXEL_8x8 ) \
+        { \
+            h->mc.mc_chroma( pixu, FDEC_STRIDE, m->p_fref[4], m->i_stride[1], mx, my + mvy_offset, bw>>1, bh>>1 ); \
+            h->mc.mc_chroma( pixv, FDEC_STRIDE, m->p_fref[5], m->i_stride[1], mx, my + mvy_offset, bw>>1, bh>>1 ); \
+        } \
         cost = x264_rd_cost_part( h, i_lambda2, i4, m->i_pixel ); \
         COPY4_IF_LT( bcost, cost, bmx, mx, bmy, my, dir, do_dir?mdir:dir ); \
     } \

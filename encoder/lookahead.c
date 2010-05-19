@@ -35,7 +35,6 @@
  * # of bframes + # of threads.
  */
 #include "common/common.h"
-#include "common/cpu.h"
 #include "analyse.h"
 
 static void x264_lookahead_update_last_nonb( x264_t *h, x264_frame_t *new_nonb )

@@ -97,9 +97,9 @@ static void name( uint8_t *pix1, int i_stride_pix1, \
                   uint8_t *pix2, int i_stride_pix2, \
                   uint8_t *pix3, int i_stride_pix3, int weight ) \
 { \
-    if( weight == 32 )\
+    if( weight == 32 ) \
         pixel_avg_wxh( pix1, i_stride_pix1, pix2, i_stride_pix2, pix3, i_stride_pix3, width, height ); \
-    else\
+    else \
         pixel_avg_weight_wxh( pix1, i_stride_pix1, pix2, i_stride_pix2, pix3, i_stride_pix3, width, height, weight ); \
 }
 PIXEL_AVG_C( pixel_avg_16x16, 16, 16 )
@@ -203,8 +203,8 @@ static void hpel_filter( uint8_t *dsth, uint8_t *dstv, uint8_t *dstc, uint8_t *s
     }
 }
 
-static const int hpel_ref0[16] = {0,1,1,1,0,1,1,1,2,3,3,3,0,1,1,1};
-static const int hpel_ref1[16] = {0,0,0,0,2,2,3,2,2,2,3,2,2,2,3,2};
+static const uint8_t hpel_ref0[16] = {0,1,1,1,0,1,1,1,2,3,3,3,0,1,1,1};
+static const uint8_t hpel_ref1[16] = {0,0,0,0,2,2,3,2,2,2,3,2,2,2,3,2};
 
 static void mc_luma( uint8_t *dst,    int i_dst_stride,
                      uint8_t *src[4], int i_src_stride,
@@ -427,7 +427,7 @@ static void mbtree_propagate_cost( int *dst, uint16_t *propagate_in, uint16_t *i
     for( int i = 0; i < len; i++ )
     {
         int propagate_amount = propagate_in[i] + ((intra_costs[i] * inv_qscales[i] + 128)>>8);
-        dst[i] = div_64_32((int64_t)propagate_amount * (intra_costs[i] - inter_costs[i]), intra_costs[i]);
+        dst[i] = div_64_32((int64_t)propagate_amount * (intra_costs[i] - (inter_costs[i] & LOWRES_COST_MASK)), intra_costs[i]);
     }
 }
 
