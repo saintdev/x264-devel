@@ -34,43 +34,37 @@
 
 void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame )
 {
-    int i;
-    i = 0;
-    for( i = 0; i < 3; i++ )
-    {
-        clReleaseMemObject( opencl_frame->plane[i] );
-        clReleaseEvent( opencl_frame->uploaded[i] );
-    }
-    for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ ) {
+    clReleaseMemObject( opencl_frame->plane[0] );
+    clReleaseEvent( opencl_frame->uploaded[0] );
+
+    for( int i = 0; i < MAX_PYRAMID_STEPS - 1; i++ ) {
         clReleaseMemObject( opencl_frame->lowres[i] );
         clReleaseEvent( opencl_frame->lowres_done[i] );
     }
-
-    x264_free( opencl_frame );
 }
 
-int x264_opencl_frame_new( x264_opencl_t *opencl, x264_frame_t *frame, int b_fdec )
+int x264_opencl_frame_new( x264_t* h, x264_opencl_frame_t *opencl_frame )
 {
-    x264_opencl_frame_t *opencl_frame;
-    CHECKED_MALLOCZERO( opencl_frame, sizeof( *opencl_frame ) );
-    frame->opencl = opencl_frame;
+    cl_int err = CL_SUCCESS;
     static const cl_image_format img_fmt = { CL_RGBA, CL_UNSIGNED_INT8 };
-    cl_int err;
-    int i;
 
-    if ( !b_fdec )
-    {
-        /* TODO: According to nVidia docs CL_MEM_ALLOC_HOST_POINTER is best to use.
+    /* FIXME: The buffer allocations should probably use stride instead of width. */
+    if( h->opencl->b_image_support )
+        CL_CHECK( opencl_frame->plane[0], clCreateImage2D, h->opencl->context, CL_MEM_READ_ONLY, &img_fmt, h->param.i_width, h->param.i_height, 0, NULL, &err );
+    else
+        CL_CHECK( opencl_frame->plane[0], clCreateBuffer, h->opencl->context, CL_MEM_READ_ONLY, h->param.i_width * h->param.i_height * sizeof( cl_uchar ), NULL, &err );
+
+    for( int i = 0; i < MAX_PYRAMID_STEPS - 1; i++ ) {
+        /* TODO: According to the nVidia Programming Guide CL_MEM_ALLOC_HOST_POINTER
+         *       is the only option that has a possibility of using pinned memory.
+         *       This enables DMA with mapped buffers.
          *       *BENCHMARK*
          */
-        for( i = 0; i < 3; i++ )
-            CL_CHECK( opencl_frame->plane[i], clCreateImage2D, opencl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &img_fmt, frame->i_width[i] >> 2, frame->i_lines[i], frame->i_stride[i], frame->plane[i], &err );
-
-        for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
-            CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, opencl->context, CL_MEM_READ_WRITE, &img_fmt, frame->i_width[0] >> (3+i), frame->i_lines[0] >> (1+i), 0, NULL, &err );
+        if( h->opencl->b_image_support )
+            CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, h->opencl->context, CL_MEM_READ_WRITE, &img_fmt, h->param.i_width >> (1+i), h->param.i_height >> (1+i), 0, NULL, &err );
+        else
+            CL_CHECK( opencl_frame->lowres[i], clCreateBuffer, h->opencl->context, CL_MEM_READ_WRITE, (h->param.i_width * h->param.i_height * sizeof( cl_uchar )) >> (1+i), NULL, &err );
     }
-
-    return 0;
 
 fail:
     return err;
@@ -220,6 +214,10 @@ int x264_opencl_init( x264_t *h )
     CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL );
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
 
+    /* FIXME: Should this be the number of refs or bframes? */
+    for( int i = 0; i < h->param.i_bframe + 3; i++ )
+        CL_CHECK( err, x264_opencl_frame_new, h, &opencl->frames[i] );
+
     return 0;
 
 fail:
@@ -229,6 +227,8 @@ fail:
 
 void x264_opencl_close( x264_t *h )
 {
+    for( int i = 0; i < X264_BFRAMES_MAX + 3; i++ )
+        x264_opencl_frame_delete( &h->opencl->frames[i] );
     clReleaseKernel( h->opencl->simple_me );
     clReleaseKernel( h->opencl->me_pyramid );
     clReleaseProgram( h->opencl->simple_me_prog );

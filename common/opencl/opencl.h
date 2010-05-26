@@ -33,6 +33,7 @@
 
 struct x264_opencl
 {
+    int             b_image_support;
     cl_platform_id  platform;
     cl_context      context;
 
@@ -46,6 +47,8 @@ struct x264_opencl
     // TODO: one per thread is safe, but Apple warns that having a command queue for
     // each thread may be more expensive than implementing locking on a single one
     cl_command_queue queue;
+
+    x264_opencl_frame_t frames[X264_BFRAME_MAX + 3];
 };
 
 struct x264_opencl_frame
