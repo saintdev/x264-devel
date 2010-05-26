@@ -168,7 +168,7 @@ void x264_lookahead_delete( x264_t *h )
         x264_free( h->thread[h->param.i_threads] );
     }
 #ifdef HAVE_OPENCL
-    x254_opencl_close( h );
+    x264_opencl_close( h );
 #endif
     x264_synch_frame_list_delete( &h->lookahead->ifbuf );
     x264_synch_frame_list_delete( &h->lookahead->next );
