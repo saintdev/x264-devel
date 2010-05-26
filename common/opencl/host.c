@@ -219,11 +219,11 @@ int x264_opencl_init( x264_t *h )
     for( int i = 0; i < h->param.i_bframe + 3; i++ )
         CL_CHECK( err, x264_opencl_frame_new, h, &opencl->frames[i] );
 
-    return 0;
+    return 1;
 
 fail:
     x264_free( opencl );
-    return -1;
+    return 0;
 }
 
 void x264_opencl_close( x264_t *h )

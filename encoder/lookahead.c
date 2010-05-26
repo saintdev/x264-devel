@@ -48,6 +48,10 @@ static void x264_lookahead_update_last_nonb( x264_t *h, x264_frame_t *new_nonb )
 #ifdef HAVE_PTHREAD
 static void x264_lookahead_slicetype_decide( x264_t *h )
 {
+#ifdef HAVE_OPENCL
+    if( h->param.b_opencl )
+        x264_opencl_analyse( h );
+#endif
     x264_stack_align( x264_slicetype_decide, h );
 
     x264_lookahead_update_last_nonb( h, h->lookahead->next.list[0] );
@@ -131,9 +135,8 @@ int x264_lookahead_init( x264_t *h, int i_slicetype_length )
     x264_t *look_h = h->thread[h->param.i_threads];
     *look_h = *h;
 #ifdef HAVE_OPENCL
-    if( h->param.b_opencl )
-        if( x264_opencl_init( look_h ) )
-            goto fail;;
+    if( !(h->param.b_opencl = x264_opencl_init( look_h )) )
+        x264_log( h, X264_LOG_ERROR, "OpenCL initalization failed, it has been disabled.\n" );
 #endif
     if( x264_macroblock_cache_allocate( look_h ) )
         goto fail;
