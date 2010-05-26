@@ -132,12 +132,13 @@ int x264_lookahead_init( x264_t *h, int i_slicetype_length )
     if( !h->param.i_sync_lookahead )
         return 0;
 
+#ifdef HAVE_OPENCL
+    if( !(h->param.b_opencl = x264_opencl_init( h )) )
+        x264_log( h, X264_LOG_ERROR, "OpenCL initalization failed. OpenCL has been disabled.\n" );
+#endif
+
     x264_t *look_h = h->thread[h->param.i_threads];
     *look_h = *h;
-#ifdef HAVE_OPENCL
-    if( !(h->param.b_opencl = x264_opencl_init( look_h )) )
-        x264_log( h, X264_LOG_ERROR, "OpenCL initalization failed, it has been disabled.\n" );
-#endif
     if( x264_macroblock_cache_allocate( look_h ) )
         goto fail;
 
