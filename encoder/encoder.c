@@ -1759,6 +1759,9 @@ static int x264_slice_write( x264_t *h )
     int overhead_guess = (NALU_OVERHEAD - (h->param.b_annexb && h->out.i_nal)) + 3;
     int slice_max_size = h->param.i_slice_max_size > 0 ? (h->param.i_slice_max_size-overhead_guess)*8 : INT_MAX;
     int starting_bits = bs_pos(&h->out.bs);
+    int b_deblock = h->sh.i_disable_deblocking_filter_idc != 1;
+    int b_hpel = h->fdec->b_kept_as_ref;
+    b_deblock &= b_hpel || h->param.psz_dump_yuv;
     bs_realign( &h->out.bs );
 
     /* Slice */
@@ -1948,6 +1951,19 @@ static int x264_slice_write( x264_t *h )
                         h->stat.frame.i_mb_pred_mode[2][h->mb.cache.intra4x4_pred_mode[x264_scan8[i]]]++;
                 h->stat.frame.i_mb_pred_mode[3][x264_mb_pred_mode8x8c_fix[h->mb.i_chroma_pred_mode]]++;
             }
+        }
+
+        /* calculate deblock strength values (actual deblocking is done per-row along with hpel) */
+        if( b_deblock )
+        {
+            int mvy_limit = 4 >> h->sh.b_mbaff;
+            uint8_t (*bs)[4][4] = h->deblock_strength[h->mb.i_mb_y&h->sh.b_mbaff][h->mb.i_mb_x];
+            x264_macroblock_cache_load_deblock( h );
+            if( IS_INTRA( h->mb.type[h->mb.i_mb_xy] ) )
+                memset( bs, 3, 2*4*4*sizeof(uint8_t) );
+            else
+                h->loopf.deblock_strength( h->mb.cache.non_zero_count, h->mb.cache.ref, h->mb.cache.mv,
+                                           bs, mvy_limit, h->sh.i_type == SLICE_TYPE_B );
         }
 
         x264_ratecontrol_mb( h, mb_size );
@@ -2282,8 +2298,8 @@ int     x264_encoder_encode( x264_t *h,
     /* ------------------- Get frame to be encoded ------------------------- */
     /* 4: get picture to encode */
     h->fenc = x264_frame_shift( h->frames.current );
-    if( h->i_frame == 0 )
-        h->first_pts = h->fenc->i_reordered_pts;
+    if( h->i_frame == h->i_thread_frames - 1 )
+        h->i_reordered_pts_delay = h->fenc->i_reordered_pts;
     if( h->fenc->param )
     {
         x264_encoder_reconfig( h, h->fenc->param );

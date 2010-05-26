@@ -173,7 +173,9 @@ static void print_bench(void)
                     b->cpu&X264_CPU_CACHELINE_64 ? "_c64" :
                     b->cpu&X264_CPU_SSE_MISALIGN ? "_misalign" :
                     b->cpu&X264_CPU_LZCNT ? "_lzcnt" :
-                    b->cpu&X264_CPU_FAST_NEON_MRC ? "_fast_mrc" : "",
+                    b->cpu&X264_CPU_FAST_NEON_MRC ? "_fast_mrc" :
+                    b->cpu&X264_CPU_SLOW_CTZ ? "_slow_ctz" :
+                    b->cpu&X264_CPU_SLOW_ATOM ? "_slow_atom" : "",
                     ((int64_t)10*b->cycles/b->den - nop_time)/4 );
         }
 }
@@ -1164,8 +1166,8 @@ static int check_deblock( int cpu_ref, int cpu_new )
                         mv[j][k][l] = ((rand()&7) != 7) ? (rand()&7) - 3 : (rand()&1023) - 512;
                 }
             set_func_name( "deblock_strength" );
-            call_c( db_c.deblock_strength, nnz, ref, mv, bs[0], 2<<(i&1), ((i>>1)&1), 1, 0 );
-            call_a( db_a.deblock_strength, nnz, ref, mv, bs[1], 2<<(i&1), ((i>>1)&1), 1, 0 );
+            call_c( db_c.deblock_strength, nnz, ref, mv, bs[0], 2<<(i&1), ((i>>1)&1) );
+            call_a( db_a.deblock_strength, nnz, ref, mv, bs[1], 2<<(i&1), ((i>>1)&1) );
             if( memcmp( bs[0], bs[1], sizeof(bs[0]) ) )
             {
                 ok = 0;
@@ -1700,6 +1702,8 @@ static int check_all_flags( void )
             ret |= add_flags( &cpu0, &cpu1, X264_CPU_LZCNT, "MMX_LZCNT" );
             cpu1 &= ~X264_CPU_LZCNT;
         }
+        ret |= add_flags( &cpu0, &cpu1, X264_CPU_SLOW_CTZ, "MMX SlowCTZ" );
+        cpu1 &= ~X264_CPU_SLOW_CTZ;
     }
     if( x264_cpu_detect() & X264_CPU_SSE2 )
     {
@@ -1708,6 +1712,10 @@ static int check_all_flags( void )
         ret |= add_flags( &cpu0, &cpu1, X264_CPU_CACHELINE_64, "SSE2Fast Cache64" );
         ret |= add_flags( &cpu0, &cpu1, X264_CPU_SHUFFLE_IS_FAST, "SSE2 FastShuffle" );
         cpu1 &= ~X264_CPU_SHUFFLE_IS_FAST;
+        ret |= add_flags( &cpu0, &cpu1, X264_CPU_SLOW_CTZ, "SSE2 SlowCTZ" );
+        cpu1 &= ~X264_CPU_SLOW_CTZ;
+        ret |= add_flags( &cpu0, &cpu1, X264_CPU_SLOW_ATOM, "SSE2 SlowAtom" );
+        cpu1 &= ~X264_CPU_SLOW_ATOM;
     }
     if( x264_cpu_detect() & X264_CPU_SSE_MISALIGN )
     {
@@ -1730,6 +1738,10 @@ static int check_all_flags( void )
         ret |= add_flags( &cpu0, &cpu1, X264_CPU_CACHELINE_64, "SSSE3 Cache64" );
         ret |= add_flags( &cpu0, &cpu1, X264_CPU_SHUFFLE_IS_FAST, "SSSE3 FastShuffle" );
         cpu1 &= ~X264_CPU_SHUFFLE_IS_FAST;
+        ret |= add_flags( &cpu0, &cpu1, X264_CPU_SLOW_CTZ, "SSSE3 SlowCTZ" );
+        cpu1 &= ~X264_CPU_SLOW_CTZ;
+        ret |= add_flags( &cpu0, &cpu1, X264_CPU_SLOW_ATOM, "SSSE3 SlowAtom" );
+        cpu1 &= ~X264_CPU_SLOW_ATOM;
     }
     if( x264_cpu_detect() & X264_CPU_SSE4 )
     {
