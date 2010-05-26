@@ -169,6 +169,7 @@ int x264_opencl_init( x264_t *h )
     CHECKED_MALLOCZERO( opencl, sizeof( *opencl ) );
     cl_int err = CL_SUCCESS;
     size_t size;
+    cl_bool image_support = CL_FALSE;
     cl_device_id devices[sizeof(cl_device_id) * 32];
     char device_name[1024];
     const cl_context_properties props[3] = {
@@ -213,6 +214,8 @@ int x264_opencl_init( x264_t *h )
 
     CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_NAME, sizeof(device_name), &device_name, NULL );
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
+    CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_IMAGE_SUPPORT, sizeof( image_support ), &image_support, NULL );
+    opencl->b_image_support = (image_support == CL_TRUE);
 
     /* FIXME: Should this be the number of refs or bframes? */
     for( int i = 0; i < h->param.i_bframe + 3; i++ )
