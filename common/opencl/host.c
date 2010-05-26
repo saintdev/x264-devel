@@ -135,9 +135,7 @@ static cl_int x264_opencl_get_platform( x264_t *h, cl_platform_id *platform )
         x264_free( platforms );
     }
     else
-        goto fail;
-
-    return CL_SUCCESS;
+        x264_log( h, X264_LOG_ERROR, "Unable to find an OpenCL platform.\n" );
 
 fail:
     return err;
