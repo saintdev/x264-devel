@@ -93,46 +93,31 @@ fail:
     return err;
 }
 
-static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
+static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc, x264_opencl_frame_t *clfenc )
 {
     cl_int err;
     int i;
     static const size_t zero[3] = { 0 };
+    const size_t region[3] = { fenc->i_width[0], fenc->i_lines[0], 1 };
 
     // TODO: try to see if this can DMA.
     // This will likely require allocating two images, permanently mapping one
     // for CPU use, and copying to the GPU-only one
 
-    for( i = 0; i < 3; i++ )
-    {
-        clReleaseEvent( fenc->opencl->uploaded[i] );
-        fenc->opencl->uploaded[i] = (cl_event)NULL;
-    }
-    for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
-    {
-        clReleaseEvent( fenc->opencl->lowres_done[i] );
-        fenc->opencl->lowres_done[i] = NULL;
-    }
-
-    for( i = 0; i < 3; i++ )
-    {
-        const size_t region[3] = { fenc->i_width[i] >> 2, fenc->i_lines[i], 1 };
-        CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, fenc->opencl->plane[i], CL_FALSE, zero, region, fenc->i_stride[i], 0, fenc->plane[i], 0, NULL, &fenc->opencl->uploaded[i] );
-    }
+    clReleaseEvent( clfenc->uploaded[0] );
+    clfenc->uploaded[0] = NULL;
 
     for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
     {
-        const size_t work_size[2] = { fenc->i_width[0] >> (3+i), fenc->i_lines[0] >> (1+i) };
-        cl_mem   src      = i ? fenc->opencl->lowres[i-1]      : fenc->opencl->plane[0];
-        cl_event src_done = i ? fenc->opencl->lowres_done[i-1] : fenc->opencl->uploaded[0];
-
-        CL_CHECK( err, clSetKernelArg, h->opencl->downsample_kernel, 0, sizeof(cl_mem), &fenc->opencl->lowres[i] );
-        CL_CHECK( err, clSetKernelArg, h->opencl->downsample_kernel, 1, sizeof(cl_mem), &src );
-        CL_CHECK( err, clEnqueueNDRangeKernel, h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, work_size, NULL, 1, &src_done, &fenc->opencl->lowres_done[i] );
-
-        CL_CHECK( err, clEnqueueReadImage, h->opencl->queue, fenc->opencl->lowres[i], CL_TRUE, zero, work_size, fenc->i_stride[0], 0, fenc->plane[0], 1, &fenc->opencl->lowres_done[i], NULL );
+        clReleaseEvent( clfenc->lowres_done[i] );
+        clfenc->lowres_done[i] = NULL;
     }
-    return 0;
+
+    if( h->opencl->b_image_support )
+        CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, clfenc->plane[0], CL_FALSE, zero, region, fenc->i_stride[0], 0, fenc->plane[0], 0, NULL, clfenc->uploaded[0] );
+    else
+        CL_CHECK( err, clEnqueueWriteBuffer, h->opencl->queue, clfenc->plane[0], CL_FALSE, 0, fenc->i_stride[0] * fenc->i_width[0] * sizeof( *fenc->plane[0] ), fenc->plane[0], 0, NULL, clfenc->uploaded[0] );
+
 fail:
     return err;
 }
@@ -264,4 +249,15 @@ void x264_opencl_close( x264_t *h )
     clReleaseContext( h->opencl->context );
 
     x264_free( h->opencl );
+}
+
+int x264_opencl_analyse( x264_t *h )
+{
+    cl_int err = CL_SUCCESS;
+
+    for( int i = 0; i < h->lookahead->next.i_size; i++ )
+        CL_CHECK( err, x264_opencl_frame_upload, h, h->lookahead->next.list[i], &h->opencl->frames[i] );
+
+fail:
+    return err;
 }
