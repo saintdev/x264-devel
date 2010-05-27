@@ -85,6 +85,14 @@ fail:
     return err;
 }
 
+static int x264_opencl_init_kernel_args( x264_t *h )
+{
+    cl_int err = CL_SUCCESS;
+
+fail:
+    return err;
+}
+
 static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
 {
     cl_int err;
@@ -233,6 +241,8 @@ int x264_opencl_init( x264_t *h )
     /* FIXME: Should this be the number of refs or bframes? */
     for( int i = 0; i < h->param.i_bframe + 3; i++ )
         CL_CHECK( err, x264_opencl_frame_new, h, &opencl->frames[i] );
+
+    CL_CHECK( err, x264_opencl_init_kernel_args, h );
 
     return 1;
 
