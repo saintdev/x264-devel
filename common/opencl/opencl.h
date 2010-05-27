@@ -57,6 +57,8 @@ struct x264_opencl_frame
     cl_event    uploaded[3];    // clEnqueueWriteImage has completed
     cl_mem      lowres[MAX_PYRAMID_STEPS-1];
     cl_event    lowres_done[MAX_PYRAMID_STEPS-1];
+    cl_mem      pmvs[2][X264_BFRAME_MAX+1]
+    cl_event    mvs_ready[2][X264_BFRAME_MAX+1]
 };
 
 int  x264_opencl_init( x264_t *h );

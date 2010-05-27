@@ -41,6 +41,12 @@ void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame )
         clReleaseMemObject( opencl_frame->lowres[i] );
         clReleaseEvent( opencl_frame->lowres_done[i] );
     }
+    for( int i = 0; i < X264_BFRAME_MAX; i++ ) {
+        for( int j = 0; j < 2; j++ ){
+            clReleaseMemObject( opencl_frame->pmvs[j][i] );
+            clReleaseEvent( opencl_frame->mvs_ready[j][i] );
+        }
+    }
 }
 
 int x264_opencl_frame_new( x264_t* h, x264_opencl_frame_t *opencl_frame )
@@ -55,16 +61,25 @@ int x264_opencl_frame_new( x264_t* h, x264_opencl_frame_t *opencl_frame )
         CL_CHECK( opencl_frame->plane[0], clCreateBuffer, h->opencl->context, CL_MEM_READ_ONLY, h->param.i_width * h->param.i_height * sizeof( cl_uchar ), NULL, &err );
 
     for( int i = 0; i < MAX_PYRAMID_STEPS - 1; i++ ) {
-        /* TODO: According to the nVidia Programming Guide CL_MEM_ALLOC_HOST_POINTER
-         *       is the only option that has a possibility of using pinned memory.
-         *       This enables DMA with mapped buffers.
-         *       *BENCHMARK*
+        /* TODO: -According to the nVidia Programming Guide CL_MEM_ALLOC_HOST_POINTER
+         *        is the only option that has a possibility of using pinned memory.
+         *        This allows DMA when used with mapped buffers.
+         *        *BENCHMARK*
+         *       -Perhaps we should use two buffers here, one read only, and one write only.
+         *        Then copy the downsampled frame from the write only buffer to the read only one.
+         *        This would allow the possibility of using texture memory for lowres on cards that
+         *        have read only texture memory.
          */
         if( h->opencl->b_image_support )
             CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, h->opencl->context, CL_MEM_READ_WRITE, &img_fmt, h->param.i_width >> (1+i), h->param.i_height >> (1+i), 0, NULL, &err );
         else
             CL_CHECK( opencl_frame->lowres[i], clCreateBuffer, h->opencl->context, CL_MEM_READ_WRITE, (h->param.i_width * h->param.i_height * sizeof( cl_uchar )) >> (1+i), NULL, &err );
     }
+    for( int i = 0; i < h->param.i_bframe + 1; i++ ) {
+        for( int j = 0; j < 2; j++ )
+            CL_CHECK( opencl_frame->pmvs[j][i], clCreateBuffer, h->opencl->context, CL_MEM_READ_WRITE, h->mb.i_mb_count * sizeof( cl_short2 ), NULL, &err );
+    }
+
 
 fail:
     return err;
