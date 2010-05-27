@@ -23,13 +23,13 @@
 #include "common/common.h"
 #include "opencl.h"
 
-#define CL_CHECK(ret,func,...) { \
+#define CL_CHECK(ret,func,...) do { \
     ret = func( __VA_ARGS__ ); \
     if ( err != CL_SUCCESS ) { \
         x264_log( h, X264_LOG_ERROR, "%s failed with error ID: %d!\n", #func, err ); \
         goto fail; \
     } \
-}
+} while(0)
 #define CLFLAGS "-cl-mad-enable -cl-strict-aliasing"
 
 void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame )
