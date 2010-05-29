@@ -96,7 +96,6 @@ fail:
 static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc, x264_opencl_frame_t *clfenc )
 {
     cl_int err;
-    int i;
     static const size_t zero[3] = { 0 };
     const size_t region[3] = { fenc->i_width[0], fenc->i_lines[0], 1 };
 
@@ -107,7 +106,7 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc, x264_opencl_
     clReleaseEvent( clfenc->uploaded[0] );
     clfenc->uploaded[0] = NULL;
 
-    for( i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
+    for( int i = 0; i < MAX_PYRAMID_STEPS-1; i++ )
     {
         clReleaseEvent( clfenc->lowres_done[i] );
         clfenc->lowres_done[i] = NULL;
@@ -251,12 +250,36 @@ void x264_opencl_close( x264_t *h )
     x264_free( h->opencl );
 }
 
+static int x264_opencl_lowres_init( x264_t *h, x264_opencl_frame_t *fenc )
+{
+    /* FIXME: Multiple frames at once? */
+    for( int i = 0; i < MAX_PYRAMID_STEPS-1; i++ ) {
+        cl_mem *src = !i ? &fenc->plane[0] : &fenc->lowres[i-1];
+        cl_event *src_done = !i ? &fenc->uploaded[0] : &fenc->lowres_done[i-1];
+        size_t global_size[2] = { h->param.i_width >> i + 1, h->param.i_height >> i + 1 };
+        /* FIXME: Ideal group sizes on current are 32 for nVidia, and 64 for ATI. It would
+         *        be a good idea to detect what hardware we are on, and set group size
+         *        accordingly.
+         */
+        size_t local_size[2] = { 32, 1 };
+        clSetKernelArg( h->opencl->downsample_kernel, 0, sizeof(cl_mem), src );
+        clSetKernelArg( h->opencl->downsample_kernel, 1, sizeof(cl_mem), &fenc->lowres[i] );
+        clEnqueueNDRangeKernel( h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, &global_size, &local_size, 1, src_done, &fenc->lowres_done[i] );
+    }
+    /* FIXME: Download the first downsampled image for non-OpenCL lookahead functions to use. */
+}
+
 int x264_opencl_analyse( x264_t *h )
 {
     cl_int err = CL_SUCCESS;
 
-    for( int i = 0; i < h->lookahead->next.i_size; i++ )
+    for( int i = 0; i < h->lookahead->next.i_size; i++ ) {
         CL_CHECK( err, x264_opencl_frame_upload, h, h->lookahead->next.list[i], &h->opencl->frames[i] );
+        CL_CHECK( err, x264_opencl_lowres_init, h, h->opencl->frames[i] );
+    }
+
+    for( int i = 0; i < h->lookahead->next.i_size-1; i++ )
+        CL_CHECK( err, x264_opencl_me_search_ref, h, &h->opencl->frames[i], &h->opencl.frames[i+1] );
 
 fail:
     return err;
