@@ -95,7 +95,7 @@ fail:
 
 static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
 {
-    cl_int err = CL_SUCCESS;
+    cl_int err;
     static const size_t zero[3] = { 0 };
     const size_t region[3] = { fenc->i_width[0], fenc->i_lines[0], 1 };
     x264_opencl_frame_t *clfenc;
@@ -105,7 +105,7 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
     // for CPU use, and copying to the GPU-only one
 
     if( fenc->opencl )
-        return CL_SUCCESS;
+        return 0;
 
     /* Find the first unused opencl frame */
     for( int i = 0; i < X264_BFRAME_MAX + 3; i++ )
@@ -132,8 +132,10 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
     fenc->opencl = clfenc;
     clfenc->i_ref_count++;
 
+    return 1;
+
 fail:
-    return err;
+    return -1;
 }
 
 static void opencl_log( const char *errinfo, const void *priv, size_t cb, void *h )
@@ -295,8 +297,8 @@ int x264_opencl_analyse( x264_t *h )
 
     for( int i = 0; i < h->lookahead->next.i_size; i++ ) {
         frames[i+1] = h->lookahead->next.list[i];
-        CL_CHECK( err, x264_opencl_frame_upload, h, frames[i+1] );
-        CL_CHECK( err, x264_opencl_lowres_init, h, frames[i+1]->opencl );
+        if( x264_opencl_frame_upload( h, frames[i+1] ) > 0 )
+            CL_CHECK( err, x264_opencl_lowres_init, h, frames[i+1]->opencl );
     }
 
     /* TODO: Do motion search on more than just the previous frame. */
