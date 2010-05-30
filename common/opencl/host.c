@@ -287,10 +287,16 @@ static int x264_opencl_lowres_init( x264_t *h, x264_opencl_frame_t *fenc )
 int x264_opencl_analyse( x264_t *h )
 {
     cl_int err = CL_SUCCESS;
+    x264_frame_t *frames[X264_LOOKAHEAD_MAX+3] = { NULL, };
+
+    if( !h->lookahead->last_nonb )
+        return;
+    frames[0] = h->lookahead->last_nonb;
 
     for( int i = 0; i < h->lookahead->next.i_size; i++ ) {
-        CL_CHECK( err, x264_opencl_frame_upload, h, h->lookahead->next.list[i] );
-        CL_CHECK( err, x264_opencl_lowres_init, h, h->opencl->frames[i] );
+        frames[i+1] = h->lookahead->next.list[i];
+        CL_CHECK( err, x264_opencl_frame_upload, h, frames[i+1] );
+        CL_CHECK( err, x264_opencl_lowres_init, h, frames[i+1]->opencl );
     }
 
     /* TODO: Do motion search on more than just the previous frame. */
