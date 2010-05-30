@@ -93,15 +93,27 @@ fail:
     return err;
 }
 
-static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc, x264_opencl_frame_t *clfenc )
+static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
 {
-    cl_int err;
+    cl_int err = CL_SUCCESS;
     static const size_t zero[3] = { 0 };
     const size_t region[3] = { fenc->i_width[0], fenc->i_lines[0], 1 };
+    x264_opencl_frame_t *clfenc;
 
     // TODO: try to see if this can DMA.
     // This will likely require allocating two images, permanently mapping one
     // for CPU use, and copying to the GPU-only one
+
+    if( fenc->opencl )
+        return CL_SUCCESS;
+
+    /* Find the first unused opencl frame */
+    for( int i = 0; i < X264_BFRAME_MAX + 3; i++ )
+        if( !h->opencl->frames[i].i_ref_count ) {
+            clfenc = &h->opencl->frames[i];
+            break;
+        }
+
 
     clReleaseEvent( clfenc->uploaded[0] );
     clfenc->uploaded[0] = NULL;
@@ -116,6 +128,9 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc, x264_opencl_
         CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, clfenc->plane[0], CL_FALSE, zero, region, fenc->i_stride[0], 0, fenc->plane[0], 0, NULL, clfenc->uploaded[0] );
     else
         CL_CHECK( err, clEnqueueWriteBuffer, h->opencl->queue, clfenc->plane[0], CL_FALSE, 0, fenc->i_stride[0] * fenc->i_width[0] * sizeof( *fenc->plane[0] ), fenc->plane[0], 0, NULL, clfenc->uploaded[0] );
+
+    fenc->opencl = clfenc;
+    clfenc->i_ref_count++;
 
 fail:
     return err;
@@ -274,10 +289,11 @@ int x264_opencl_analyse( x264_t *h )
     cl_int err = CL_SUCCESS;
 
     for( int i = 0; i < h->lookahead->next.i_size; i++ ) {
-        CL_CHECK( err, x264_opencl_frame_upload, h, h->lookahead->next.list[i], &h->opencl->frames[i] );
+        CL_CHECK( err, x264_opencl_frame_upload, h, h->lookahead->next.list[i] );
         CL_CHECK( err, x264_opencl_lowres_init, h, h->opencl->frames[i] );
     }
 
+    /* TODO: Do motion search on more than just the previous frame. */
     for( int i = 0; i < h->lookahead->next.i_size-1; i++ )
         CL_CHECK( err, x264_opencl_me_search_ref, h, &h->opencl->frames[i], &h->opencl.frames[i+1] );
 

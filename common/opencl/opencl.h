@@ -53,6 +53,7 @@ struct x264_opencl
 
 struct x264_opencl_frame
 {
+    int         i_ref_count;
     cl_mem      plane[3];
     cl_event    uploaded[3];    // clEnqueueWriteImage has completed
     cl_mem      lowres[MAX_PYRAMID_STEPS-1];
