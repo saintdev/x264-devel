@@ -56,6 +56,11 @@ static void x264_lookahead_slicetype_decide( x264_t *h )
 
     x264_lookahead_update_last_nonb( h, h->lookahead->next.list[0] );
 
+#ifdef HAVE_OPENCL
+    if( h->param.b_opencl )
+        x264_opencl_frame_unref( h, h->lookahead->next.list[0]->i_bframes + 1 );
+#endif
+
     x264_pthread_mutex_lock( &h->lookahead->ofbuf.mutex );
     while( h->lookahead->ofbuf.i_size == h->lookahead->ofbuf.i_max_size )
         x264_pthread_cond_wait( &h->lookahead->ofbuf.cv_empty, &h->lookahead->ofbuf.mutex );

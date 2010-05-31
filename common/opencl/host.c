@@ -290,21 +290,34 @@ int x264_opencl_analyse( x264_t *h )
 {
     cl_int err = CL_SUCCESS;
     x264_frame_t *frames[X264_LOOKAHEAD_MAX+3] = { NULL, };
+    int framecnt;
+    int i_max_search = X264_MIN( h->lookahead->next.i_size, X264_LOOKAHEAD_MAX );
+    if( h->param.b_deterministic )
+        i_max_search = X264_MIN( i_max_search, h->lookahead->i_slicetype_length + !keyframe );
 
+    /* FIXME: Should this be moved to x264_slicetype_analyse, a lot of duplicated code here. */
     if( !h->lookahead->last_nonb )
         return;
     frames[0] = h->lookahead->last_nonb;
-
-    for( int i = 0; i < h->lookahead->next.i_size; i++ ) {
-        frames[i+1] = h->lookahead->next.list[i];
-        if( x264_opencl_frame_upload( h, frames[i+1] ) > 0 )
-            CL_CHECK( err, x264_opencl_lowres_init, h, frames[i+1]->opencl );
+    for( framecnt = 0; framecnt < i_max_search; framecnt++ ) {
+        frames[framecnt+1] = h->lookahead->next.list[framecnt];
+        if( x264_opencl_frame_upload( h, frames[framecnt+1] ) > 0 )
+            CL_CHECK( err, x264_opencl_lowres_init, h, frames[framecnt+1]->opencl );
     }
 
     /* TODO: Do motion search on more than just the previous frame. */
-    for( int i = 0; i < h->lookahead->next.i_size-1; i++ )
-        CL_CHECK( err, x264_opencl_me_search_ref, h, &h->opencl->frames[i], &h->opencl.frames[i+1] );
+    for( int i = 0; i < framecnt; i++ )
+        CL_CHECK( err, x264_opencl_slicetype_cost, h, frames, i, 0, i+1 );
 
 fail:
     return err;
+}
+
+x264_opencl_frame_unref( x264_t *h, int i_bframes )
+{
+    x264_opencl_frame_t *clframe;
+    for( int i = 0; i < i_bframes; i++ ) {
+        h->lookahead->next.list[i]->opencl->i_ref_count--;
+        h->lookahead->next.list[i]->opencl = NULL;
+    }
 }
