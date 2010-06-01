@@ -31,6 +31,17 @@
 
 #define MAX_PYRAMID_STEPS 4
 
+struct x264_opencl_frame
+{
+    int         i_ref_count;
+    cl_mem      plane[3];
+    cl_event    uploaded[3];    // clEnqueueWriteImage has completed
+    cl_mem      lowres[MAX_PYRAMID_STEPS-1];
+    cl_event    lowres_done[MAX_PYRAMID_STEPS-1];
+    cl_mem      pmvs[2][X264_BFRAME_MAX+1];
+    cl_event    mvs_ready[2][X264_BFRAME_MAX+1];
+};
+
 struct x264_opencl
 {
     int             b_image_support;
@@ -51,20 +62,11 @@ struct x264_opencl
     x264_opencl_frame_t frames[X264_LOOKAHEAD_MAX];
 };
 
-struct x264_opencl_frame
-{
-    int         i_ref_count;
-    cl_mem      plane[3];
-    cl_event    uploaded[3];    // clEnqueueWriteImage has completed
-    cl_mem      lowres[MAX_PYRAMID_STEPS-1];
-    cl_event    lowres_done[MAX_PYRAMID_STEPS-1];
-    cl_mem      pmvs[2][X264_BFRAME_MAX+1]
-    cl_event    mvs_ready[2][X264_BFRAME_MAX+1]
-};
-
 int  x264_opencl_init( x264_t *h );
 void x264_opencl_close( x264_t *h );
-int  x264_opencl_frame_new( struct x264_opencl *opencl, x264_frame_t *frame, int b_fdec );
+int  x264_opencl_analyse( x264_t *h );
+void x264_opencl_frame_unref( x264_t *h, int i_bframes );
+int  x264_opencl_frame_new( x264_t* h, x264_opencl_frame_t *opencl_frame );
 void x264_opencl_frame_delete( x264_opencl_frame_t *opencl_frame );
 
 #endif

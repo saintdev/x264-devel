@@ -125,9 +125,9 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
     }
 
     if( h->opencl->b_image_support )
-        CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, clfenc->plane[0], CL_FALSE, zero, region, fenc->i_stride[0], 0, fenc->plane[0], 0, NULL, clfenc->uploaded[0] );
+        CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, clfenc->plane[0], CL_FALSE, zero, region, fenc->i_stride[0], 0, fenc->plane[0], 0, NULL, &clfenc->uploaded[0] );
     else
-        CL_CHECK( err, clEnqueueWriteBuffer, h->opencl->queue, clfenc->plane[0], CL_FALSE, 0, fenc->i_stride[0] * fenc->i_width[0] * sizeof( *fenc->plane[0] ), fenc->plane[0], 0, NULL, clfenc->uploaded[0] );
+        CL_CHECK( err, clEnqueueWriteBuffer, h->opencl->queue, clfenc->plane[0], CL_FALSE, 0, fenc->i_stride[0] * fenc->i_width[0] * sizeof( *fenc->plane[0] ), fenc->plane[0], 0, NULL, &clfenc->uploaded[0] );
 
     fenc->opencl = clfenc;
     clfenc->i_ref_count++;
@@ -240,7 +240,7 @@ int x264_opencl_init( x264_t *h )
     opencl->b_image_support = (image_support == CL_TRUE);
 
     /* FIXME: Is delay correct? */
-    for( int i = 0; i < h->param.i_delay + 3; i++ )
+    for( int i = 0; i < h->frames.i_delay; i++ )
         CL_CHECK( err, x264_opencl_frame_new, h, &opencl->frames[i] );
 
     CL_CHECK( err, x264_opencl_init_kernel_args, h );
@@ -269,19 +269,19 @@ void x264_opencl_close( x264_t *h )
 
 static int x264_opencl_lowres_init( x264_t *h, x264_opencl_frame_t *fenc )
 {
+    const size_t local_size[2] = { 32, 1 };
     /* FIXME: Multiple frames at once? */
     for( int i = 0; i < MAX_PYRAMID_STEPS-1; i++ ) {
         cl_mem *src = !i ? &fenc->plane[0] : &fenc->lowres[i-1];
         cl_event *src_done = !i ? &fenc->uploaded[0] : &fenc->lowres_done[i-1];
-        size_t global_size[2] = { h->param.i_width >> i + 1, h->param.i_height >> i + 1 };
+        const size_t global_size[2] = { h->param.i_width >> (i + 1), h->param.i_height >> (i + 1) };
         /* FIXME: Ideal group sizes on current are 32 for nVidia, and 64 for ATI. It would
          *        be a good idea to detect what hardware we are on, and set group size
          *        accordingly.
          */
-        size_t local_size[2] = { 32, 1 };
         clSetKernelArg( h->opencl->downsample_kernel, 0, sizeof(cl_mem), src );
         clSetKernelArg( h->opencl->downsample_kernel, 1, sizeof(cl_mem), &fenc->lowres[i] );
-        clEnqueueNDRangeKernel( h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, &global_size, &local_size, 1, src_done, &fenc->lowres_done[i] );
+        clEnqueueNDRangeKernel( h->opencl->queue, h->opencl->downsample_kernel, 2, NULL, global_size, local_size, 1, src_done, &fenc->lowres_done[i] );
     }
     /* FIXME: Download the first downsampled image for non-OpenCL lookahead functions to use. */
 }
@@ -292,14 +292,14 @@ int x264_opencl_slicetype_cost( x264_t *h, x264_frame_t **frames, int b, int p0,
     x264_opencl_frame_t *fenc = frames[b]->opencl;
     x264_opencl_frame_t *fref0 = frames[p0]->opencl;
     x264_opencl_frame_t *fref1 = frames[p1]->opencl;
-    cl_event lowres_done[X264_PYRAMID_STEPS*2];
+    cl_event lowres_done[MAX_PYRAMID_STEPS*2];
     size_t local_size[2] = { 32, 1 };
 
     /* FIXME: Clean this up */
-    memcpy( lowres_done, fenc->lowres_done, X264_PYRAMID_STEPS * sizeof( cl_event ) );
-    memcpy( &lowres_done[X264_PYRAMID_STEPS], fref0->lowres_done, X264_PYRAMID_STEPS * sizeof( cl_event ) );
+    memcpy( lowres_done, fenc->lowres_done, MAX_PYRAMID_STEPS * sizeof( cl_event ) );
+    memcpy( &lowres_done[MAX_PYRAMID_STEPS], fref0->lowres_done, MAX_PYRAMID_STEPS * sizeof( cl_event ) );
 
-    for( int i = MAX_PYRAMID_STEPS-1; i >= 0; i-- ) {
+    for( int i = MAX_PYRAMID_STEPS; i >= 0; i-- ) {
         size_t global_size[2] = { h->mb.i_mb_stride >> i, (h->mb.i_mb_count / h->mb.i_mb_stride) >> i };
         cl_mem *arg_fenc = !i ? &fenc->lowres[i] : &fenc->plane[0];
         cl_mem *arg_fref = !i ? &fref0->lowres[i] : &fref0->plane[0];
@@ -321,11 +321,11 @@ int x264_opencl_analyse( x264_t *h )
     int framecnt;
     int i_max_search = X264_MIN( h->lookahead->next.i_size, X264_LOOKAHEAD_MAX );
     if( h->param.b_deterministic )
-        i_max_search = X264_MIN( i_max_search, h->lookahead->i_slicetype_length + !keyframe );
+        i_max_search = X264_MIN( i_max_search, h->lookahead->i_slicetype_length );
 
     /* FIXME: Should this be moved to x264_slicetype_analyse, a lot of duplicated code here. */
     if( !h->lookahead->last_nonb )
-        return;
+        return 0;
     frames[0] = h->lookahead->last_nonb;
     for( framecnt = 0; framecnt < i_max_search; framecnt++ ) {
         frames[framecnt+1] = h->lookahead->next.list[framecnt];
@@ -343,7 +343,6 @@ fail:
 
 void x264_opencl_frame_unref( x264_t *h, int i_bframes )
 {
-    x264_opencl_frame_t *clframe;
     for( int i = 0; i < i_bframes; i++ ) {
         h->lookahead->next.list[i]->opencl->i_ref_count--;
         h->lookahead->next.list[i]->opencl = NULL;
