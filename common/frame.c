@@ -163,10 +163,6 @@ x264_frame_t *x264_frame_new( x264_t *h, int b_fdec )
         }
     }
 
-    if( h->param.b_opencl )
-        if( x264_opencl_frame_new( h->opencl, frame, b_fdec ) )
-            goto fail;
-
     if( x264_pthread_mutex_init( &frame->mutex, NULL ) )
         goto fail;
     if( x264_pthread_cond_init( &frame->cv, NULL ) )
@@ -216,8 +212,6 @@ void x264_frame_delete( x264_frame_t *frame )
         x264_free( frame->ref[1] );
         x264_pthread_mutex_destroy( &frame->mutex );
         x264_pthread_cond_destroy( &frame->cv );
-        if( frame->opencl )
-            x264_opencl_frame_delete( frame->opencl );
     }
     x264_free( frame );
 }
