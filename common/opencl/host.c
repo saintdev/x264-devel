@@ -286,6 +286,34 @@ static int x264_opencl_lowres_init( x264_t *h, x264_opencl_frame_t *fenc )
     /* FIXME: Download the first downsampled image for non-OpenCL lookahead functions to use. */
 }
 
+int x264_opencl_slicetype_cost( x264_t *h, x264_frame_t **frames, int b, int p0, int p1 )
+{
+    cl_int err;
+    x264_opencl_frame_t *fenc = frames[b]->opencl;
+    x264_opencl_frame_t *fref0 = frames[p0]->opencl;
+    x264_opencl_frame_t *fref1 = frames[p1]->opencl;
+    cl_event lowres_done[X264_PYRAMID_STEPS*2];
+    size_t local_size[2] = { 32, 1 };
+
+    /* FIXME: Clean this up */
+    memcpy( lowres_done, fenc->lowres_done, X264_PYRAMID_STEPS * sizeof( cl_event ) );
+    memcpy( &lowres_done[X264_PYRAMID_STEPS], fref0->lowres_done, X264_PYRAMID_STEPS * sizeof( cl_event ) );
+
+    for( int i = MAX_PYRAMID_STEPS-1; i >= 0; i-- ) {
+        size_t global_size[2] = { h->mb.i_mb_stride >> i, (h->mb.i_mb_count / h->mb.i_mb_stride) >> i };
+        cl_mem *arg_fenc = !i ? &fenc->lowres[i] : &fenc->plane[0];
+        cl_mem *arg_fref = !i ? &fref0->lowres[i] : &fref0->plane[0];
+        cl_event arg_events[2] = { lowres_done[i], lowres_done[i+MAX_PYRAMID_STEPS] };
+        CL_CHECK( err, clSetKernelArg, h->opencl->simple_me, 0, sizeof( cl_mem ), arg_fenc );
+        CL_CHECK( err, clSetKernelArg, h->opencl->simple_me, 1, sizeof( cl_mem ), arg_fref );
+        CL_CHECK( err, clSetKernelArg, h->opencl->simple_me, 2, sizeof( cl_mem ), fenc->pmvs[0][0] );
+        CL_CHECK( err, clEnqueueNDRangeKernel, h->opencl->queue, h->opencl->simple_me, 2, NULL, global_size, local_size, 2, arg_events, NULL );
+    }
+
+fail:
+    return err;
+}
+
 int x264_opencl_analyse( x264_t *h )
 {
     cl_int err = CL_SUCCESS;
@@ -313,7 +341,7 @@ fail:
     return err;
 }
 
-x264_opencl_frame_unref( x264_t *h, int i_bframes )
+void x264_opencl_frame_unref( x264_t *h, int i_bframes )
 {
     x264_opencl_frame_t *clframe;
     for( int i = 0; i < i_bframes; i++ ) {
