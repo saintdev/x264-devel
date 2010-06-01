@@ -108,7 +108,7 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
         return 0;
 
     /* Find the first unused opencl frame */
-    for( int i = 0; i < X264_BFRAME_MAX + 3; i++ )
+    for( int i = 0; i < X264_LOOKAHEAD_MAX; i++ )
         if( !h->opencl->frames[i].i_ref_count ) {
             clfenc = &h->opencl->frames[i];
             break;
@@ -239,8 +239,8 @@ int x264_opencl_init( x264_t *h )
     CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_IMAGE_SUPPORT, sizeof( image_support ), &image_support, NULL );
     opencl->b_image_support = (image_support == CL_TRUE);
 
-    /* FIXME: Should this be the number of refs or bframes? */
-    for( int i = 0; i < h->param.i_bframe + 3; i++ )
+    /* FIXME: Is delay correct? */
+    for( int i = 0; i < h->param.i_delay + 3; i++ )
         CL_CHECK( err, x264_opencl_frame_new, h, &opencl->frames[i] );
 
     CL_CHECK( err, x264_opencl_init_kernel_args, h );
@@ -254,7 +254,7 @@ fail:
 
 void x264_opencl_close( x264_t *h )
 {
-    for( int i = 0; i < X264_BFRAMES_MAX + 3; i++ )
+    for( int i = 0; i < X264_LOOKAHEAD_MAX; i++ )
         x264_opencl_frame_delete( &h->opencl->frames[i] );
     clReleaseKernel( h->opencl->simple_me );
     clReleaseKernel( h->opencl->me_pyramid );

@@ -48,7 +48,7 @@ struct x264_opencl
     // each thread may be more expensive than implementing locking on a single one
     cl_command_queue queue;
 
-    x264_opencl_frame_t frames[X264_BFRAME_MAX + 3];
+    x264_opencl_frame_t frames[X264_LOOKAHEAD_MAX];
 };
 
 struct x264_opencl_frame
