@@ -20,10 +20,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02111, USA.
  *****************************************************************************/
 
-typedef unsigned short uint16_t;
-typedef short int16_t;
+#include "common/opencl/common.hl"
+#include "common/opencl/images.hl"
 
-constant sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+
+typedef struct {
+    short2  mv;
+    uint    cost;
+} x264_opencl_result_t;
 
 #define COPY2_IF_LT(x,y,a,b)\
 if((y)<(x))\
@@ -42,38 +46,74 @@ if((y)<(x))\
 // NOTE: texture reads are probably as fast as shared reads, so there shouldn't be any gain
 // from loading an area into shared memory to reduce texture reads.
 
-inline uint simple_sad( image2d_t pix1, image2d_t pix2, int2 block, int2 mv, int size )
+inline uint simple_sad( x264_image_t pix1, x264_image_t pix2, uint2 block_pos, short2 mv )
 {
     uint sum = 0;
     int2 pos;
 
-    for (pos.y = block.y; pos.y < block.y + size; pos.y++)
-        for (pos.x = block.x; pos.x < block.x + size; pos.x++) {
-            uint a = read_imageui(pix1, s, pos).s0;
-            uint b = read_imageui(pix2, s, pos + mv).s0;
-            sum += abs_diff(a, b);
+    for( pos.y = block_pos.y; pos.y < block_pos.y + 16; pos.y++ )
+        for( pos.x = block_pos.x; pos.x < block_pos.x + 16; pos.x++ ) {
+            uint a = x264_read_image( pix1, s, pos );
+            uint b = x264_read_image( pix2, s, pos + (int2)(mv) );
+            sum += abs_diff( a, b );
         }
     return sum;
 }
 
-kernel void simple_me( __read_only image2d_t pix1, __read_only image2d_t pix2,
-                         __global uint16_t *out, int width, int height )
+inline int2 median_mv( int2 a, int2 b, int2 c )
 {
-    int2 block = (int2)(get_global_id(0), get_global_id(1));
-    int2 mv;
-    uint min = -1;
-    int2 min_mv;
+    int2 t = a;
+    a = max( a, b );
+    b = min( t, b );
+    a = min( c, a );
+    a = max( b, a );
+    return a;
+}
 
-    for (mv.y = -16; mv.y < 16; mv.y++)
-        for (mv.x = -16; mv.x < 16; mv.x++)
+__kernel void simple_me( READ_ONLY x264_image_t fenc, READ_ONLY x264_image_t fref,
+                         global x264_opencl_result_t *result, uint scale_factor,
+                         uint stride, uint mb_stride )
+{
+    const uint2 block = (int2)(get_global_id(0), get_global_id(1));
+    const uint2 block_position = block * (uint2)(16);
+
+    const x264_opencl_result_t pred_l  = result[(block.x-1 + block.y     * mb_stride) >> 1];
+    const x264_opencl_result_t pred_t  = result[(block.x   + (block.y-1) * mb_stride) >> 1];
+    const x264_opencl_result_t pred_tr = result[(block.x+1 + (block.y-1) * mb_stride) >> 1];
+
+    // Compute the median of the three vectors (multiple of 2 because the blocks were down sampled)
+    const short2 pmv = median_mv(pred_l.mv, pred_t.mv, pred_tr.mv) * (short2)(2);
+/*
+    int4 motion_vector;
+    motion_vector.xy = read_imagei(previous, sampler_motion_vector, block / 2).xy * 2;*/
+
+    // Compute the best starting point
+    motion_vector.z = compute_motion_cost(imageA, imageB, sampler, block_position, motion_vector.xy, motion_vector_predicted, scale_factor);
+    int4 candidate;
+    candidate.xy = (0,0);
+    candidate.z = compute_motion_cost(imageA, imageB, sampler, block_position, candidate.xy, motion_vector_predicted, scale_factor);
+    motion_vector = take_best_motion(candidate, motion_vector);
+    candidate.xy = motion_vector_predicted;
+    candidate.z = compute_motion_cost(imageA, imageB, sampler, block_position, candidate.xy, motion_vector_predicted, scale_factor);
+    motion_vector = take_best_motion(candidate, motion_vector);
+
+    for(int iter = 0 ; iter < 4 ; ++iter)
+    {
+        motion_vector = find_best_hexa_motion(imageA, imageB, sampler, block_position, motion_vector, motion_vector_predicted, scale_factor);
+    }
+
+    // do a local search
+    const int2 starting = motion_vector.xy;
+    for(int x = -1 ; x < 1 ; ++x)
+        for(int y = -1 ; y < 1 ; ++y)
         {
-            uint score = simple_sad(pix1, pix2, block, mv, 8);
-            if (score < min)
-            {
-                min = score;
-                min_mv = mv;
-            }
+            int4 candidate;
+            candidate.xy = starting + (x,y);
+            candidate.z = compute_motion_cost(imageA, imageB, sampler, block_position, candidate.xy, motion_vector_predicted, scale_factor);
+            motion_vector = take_best_motion(candidate, motion_vector);
         }
+
+    write_imagei(result, block, (int4)(motion_vector.x, motion_vector.y, 0, 0));
 }
 
 uint vec_sad_aligned( image2d_t fenc, image2d_t fref, int2 mb, int2 mv, int size )

@@ -1,0 +1,50 @@
+/*****************************************************************************
+ * downsample.cl: h264 encoder library (OpenCL pyramidal motion estimation)
+ *****************************************************************************
+ * Copyright (C) 2009 x264 project
+ *
+ * Authors: David Conrad <lessen42@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02111, USA.
+ *****************************************************************************/
+
+#ifndef X264_IMAGES_HL
+#define X264_IMAGES_HL
+
+CLPP_IFDEF_IMAGE_SUPPORT
+
+#define READ_ONLY __read_only
+typedef x264_image_t image2d_t;
+
+constant sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
+
+inline uint x264_read_image( x264_image_t pix, sampler_t s, uint2 coord )
+{
+    return read_imageui( pix, s, coord ).s0;
+}
+
+CLPP_ELSE
+
+#define READ_ONLY
+typedef x264_image_t uchar*;
+
+inline uint x264_read_image( x264_image_t pix, uint stride, uint2 coord )
+{
+    return pix[coord.x + coord.y * stride];
+}
+
+CLPP_ENDIF
+
+#endif /* X264_IMAGES_HL */
