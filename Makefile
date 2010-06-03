@@ -148,10 +148,10 @@ checkasm: tools/checkasm.o libx264.a
 	-@ $(STRIP) -x $@ # delete local/anonymous symbols, so they don't show up in oprofile
 
 %.o: %.cl
-	$(CC) $(CFLAGS) -E -x c -o $(@:%.o=%.e) $<
-	$(PERL) tools/ocl-cc.pl $(@:%.o=%.e)
-	$(CC) $(CFLAGS) -c -x c -o $@ $(@:%.o=%.e)
-	-rm $(@:%.o=%.e)
+	$(CC) $(CFLAGS) -E -x c -o $(@:%.o=%.il) $<
+	$(PERL) tools/ocl-cc.pl $(@:%.o=%.il)
+	$(CC) $(CFLAGS) -c -x c -o $@ $(@:%.o=%.il)
+	-rm $(@:%.o=%.il)
 
 .depend: config.mak
 	@rm -f .depend
