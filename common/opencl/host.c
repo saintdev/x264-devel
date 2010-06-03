@@ -229,7 +229,7 @@ int x264_opencl_init( x264_t *h )
             x264_opencl_print_build_log( h, opencl->simple_me_prog, devices[0] );
         goto fail;
     }
-    CL_CHECK( opencl->me_pyramid, clCreateKernel, opencl->simple_me_prog, "me_pyramid", &err );
+//     CL_CHECK( opencl->me_pyramid, clCreateKernel, opencl->simple_me_prog, "me_pyramid", &err );
     CL_CHECK( opencl->simple_me, clCreateKernel, opencl->simple_me_prog, "simple_me", &err );
 
     clUnloadCompiler();

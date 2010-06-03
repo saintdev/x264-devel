@@ -23,28 +23,28 @@
 #ifndef X264_IMAGES_HL
 #define X264_IMAGES_HL
 
-CLPP_IFDEF_IMAGE_SUPPORT
+#ifdef __IMAGE_SUPPORT__
 
 #define READ_ONLY __read_only
-typedef x264_image_t image2d_t;
+typedef image2d_t x264_image_t;
 
 constant sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
-inline uint x264_read_image( x264_image_t pix, sampler_t s, uint2 coord )
+inline uint x264_read_image( x264_image_t pix, x264_kernel_param_t param, int2 coord )
 {
-    return read_imageui( pix, s, coord ).s0;
+    return read_imageui( pix, param.sampler, coord ).s0;
 }
 
-CLPP_ELSE
+#else
 
 #define READ_ONLY
-typedef x264_image_t uchar*;
+typedef __global uchar* x264_image_t;
 
-inline uint x264_read_image( x264_image_t pix, uint stride, uint2 coord )
+inline uint x264_read_image( x264_image_t pix, x264_kernel_param_t param, int2 coord )
 {
-    return pix[coord.x + coord.y * stride];
+    return pix[coord.x + coord.y * param.stride];
 }
 
-CLPP_ENDIF
+#endif
 
 #endif /* X264_IMAGES_HL */

@@ -23,10 +23,11 @@
 #ifndef X264_COMMON_HL
 #define X264_COMMON_HL
 
-/* Let the preprocessor abuse begin! */
-#define CLPP_IFDEF_IMAGE_SUPPORT #ifdef __IMAGE_SUPPORT
-#define CLPP_ELSE #else
-#define CLPP_ENDIF #endif
-/* Enough preprocessor abuse. For now, that is. */
+typedef struct {
+    uint mb_stride;
+    uint stride;
+    uint scale_factor;
+    sampler_t sampler;
+} x264_kernel_param_t;
 
 #endif /* X264_COMMON_HL */
