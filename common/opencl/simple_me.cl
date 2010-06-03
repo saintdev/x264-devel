@@ -90,7 +90,7 @@ uint mvd_cost( short2 mv )
     return LAMBDA * (mvc.x + mvc.y);
 }
 
-__kernel void simple_me( READ_ONLY x264_image_t fenc, READ_ONLY x264_image_t fref,
+__kernel void simple_me( x264_image_t fenc, x264_image_t fref,
                          __global x264_opencl_result_t *result, x264_kernel_param_t param )
 {
     const uint2 mb = (uint2)(get_global_id(0), get_global_id(1));
@@ -100,9 +100,9 @@ __kernel void simple_me( READ_ONLY x264_image_t fenc, READ_ONLY x264_image_t fre
     best.cost = UINT_MAX;
     short2 mv = (short2)(0);
     uint cost;
-#ifdef __IMAGE_SUPPORT__
+CLPP_IF_IMAGE_SUPPORT
     param.sampler = s;
-#endif
+CLPP_ENDIF
 
     const x264_opencl_result_t pred_l  = result[prev_mb.x-1 +  prev_mb.y    * param.mb_stride];
     const x264_opencl_result_t pred_t  = result[prev_mb.x   + (prev_mb.y-1) * param.mb_stride];

@@ -23,6 +23,11 @@
 #ifndef X264_COMMON_HL
 #define X264_COMMON_HL
 
+/* Preprocessor abuse */
+#define CLPP_IF_IMAGE_SUPPORT #ifdef __IMAGE_SUPPORT__
+#define CLPP_ELSE #else
+#define CLPP_ENDIF #endif
+
 typedef struct {
     uint mb_stride;
     uint stride;
