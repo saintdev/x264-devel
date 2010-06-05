@@ -29,10 +29,10 @@
 #define CLPP_ENDIF #endif
 
 typedef struct {
-    uint mb_stride;
-    uint stride;
-    uint scale_factor;
-    sampler_t sampler;
+    uint  mb_stride;
+    uint  stride;
+    uint2 size;
+    uint  scale_factor;
 } x264_kernel_param_t;
 
 #endif /* X264_COMMON_HL */

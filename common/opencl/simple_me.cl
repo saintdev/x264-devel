@@ -116,7 +116,7 @@ CLPP_ENDIF
     cost = simple_sad( fenc, fref, mb_pos, mv, param ) + mvd_cost( -pmv );
     COPY2_IF_LT( best.cost, cost, best.mv, mv );
     /* Should we recompute the SAD here, or will reusing our lowres SAD be "close enough"? */
-    cost = lowres.sad + mvd_cost( lowres.mv - pmv );
+    cost = simple_sad( fenc, fref, mb_pos, lowres.mv, param) + mvd_cost( lowres.mv - pmv );
     COPY2_IF_LT( best.cost, cost, best.mv, lowres.mv );
     cost = simple_sad( fenc, fref, mb_pos, pmv, param );
     COPY2_IF_LT( best.cost, cost, best.mv, pmv );

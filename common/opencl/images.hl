@@ -25,14 +25,13 @@
 
 CLPP_IF_IMAGE_SUPPORT
 
-#define READ_ONLY __read_only
 typedef __read_only image2d_t x264_image_t;
 
 constant sampler_t s = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST;
 
 inline uint x264_read_image( x264_image_t pix, x264_kernel_param_t param, int2 coord )
 {
-    return read_imageui( pix, param.sampler, coord ).s0;
+    return read_imageui( pix, s, coord ).s0;
 }
 
 CLPP_ELSE
@@ -41,6 +40,9 @@ typedef __global uchar* x264_image_t;
 
 inline uint x264_read_image( x264_image_t pix, x264_kernel_param_t param, int2 coord )
 {
+    /* Clamp out of range vaules to edges */
+    coord = min( max( coord, (int2)(0) ), (param.size - (int2)(1)) );
+
     return pix[coord.x + coord.y * param.stride];
 }
 
