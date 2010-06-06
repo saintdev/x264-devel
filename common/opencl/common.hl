@@ -28,6 +28,8 @@
 #define CLPP_ELSE #else
 #define CLPP_ENDIF #endif
 
+#define CLAMP(x,a,b) (min( max( (x), (a) ), (b) ))
+
 typedef struct {
     uint  mb_stride;
     uint  stride;

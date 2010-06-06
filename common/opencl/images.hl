@@ -41,7 +41,7 @@ typedef __global uchar* x264_image_t;
 inline uint x264_read_image( x264_image_t pix, x264_kernel_param_t param, int2 coord )
 {
     /* Clamp out of range vaules to edges */
-    coord = min( max( coord, (int2)(0) ), (param.size - (int2)(1)) );
+    coord = CLAMP( coord, (int2)(0), param.size - (int2)(1) );
 
     return pix[coord.x + coord.y * param.stride];
 }
