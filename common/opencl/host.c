@@ -53,12 +53,20 @@ int x264_opencl_frame_new( x264_t* h, x264_opencl_frame_t *opencl_frame )
 {
     cl_int err = CL_SUCCESS;
     static const cl_image_format img_fmt = { CL_RGBA, CL_UNSIGNED_INT8 };
+    int i_stride, i_width, i_lines;
+    /* FIXME: Use the proper alignment for our GPU. This is simply copied from frame.c
+     *        to make buffer transfer easier.
+     */
+    int align = h->param.cpu&X264_CPU_CACHELINE_64 ? 64 : h->param.cpu&X264_CPU_CACHELINE_32 ? 32 : 16;
 
-    /* FIXME: The buffer allocations should probably use stride instead of width. */
+    i_width = ALIGN( h->param.i_width, 16 );
+    i_stride = ALIGN( i_width + 2*PADH, align );
+    i_lines  = ALIGN( h->param.i_height, 16<<h->param.b_interlaced );
+
     if( h->opencl->b_image_support )
         CL_CHECK( opencl_frame->plane[0], clCreateImage2D, h->opencl->context, CL_MEM_READ_ONLY, &img_fmt, h->param.i_width, h->param.i_height, 0, NULL, &err );
     else
-        CL_CHECK( opencl_frame->plane[0], clCreateBuffer, h->opencl->context, CL_MEM_READ_ONLY, h->param.i_width * h->param.i_height * sizeof( cl_uchar ), NULL, &err );
+        CL_CHECK( opencl_frame->plane[0], clCreateBuffer, h->opencl->context, CL_MEM_READ_ONLY, i_stride * i_lines * sizeof( cl_uchar ), NULL, &err );
 
     for( int i = 0; i < MAX_PYRAMID_STEPS - 1; i++ ) {
         /* TODO: -According to the nVidia Programming Guide CL_MEM_ALLOC_HOST_POINTER
@@ -71,9 +79,12 @@ int x264_opencl_frame_new( x264_t* h, x264_opencl_frame_t *opencl_frame )
          *        have read only texture memory.
          */
         if( h->opencl->b_image_support )
-            CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, h->opencl->context, CL_MEM_READ_WRITE, &img_fmt, h->param.i_width >> (1+i), h->param.i_height >> (1+i), 0, NULL, &err );
-        else
-            CL_CHECK( opencl_frame->lowres[i], clCreateBuffer, h->opencl->context, CL_MEM_READ_WRITE, (h->param.i_width * h->param.i_height * sizeof( cl_uchar )) >> (1+i), NULL, &err );
+            CL_CHECK( opencl_frame->lowres[i], clCreateImage2D, h->opencl->context, CL_MEM_READ_WRITE, &img_fmt, h->param.i_width >> (i+1), h->param.i_height >> (i+1), 0, NULL, &err );
+        else {
+            /* FIXME: Use GPU alignment here! */
+            i_stride = ALIGN( i_stride >> (i+1), 64 );
+            CL_CHECK( opencl_frame->lowres[i], clCreateBuffer, h->opencl->context, CL_MEM_READ_WRITE, (i_stride * i_lines * sizeof( cl_uchar )) >> (i+1), NULL, &err );
+        }
     }
     for( int i = 0; i < h->param.i_bframe + 1; i++ ) {
         for( int j = 0; j < 2; j++ )
@@ -97,7 +108,7 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
 {
     cl_int err;
     static const size_t zero[3] = { 0 };
-    const size_t region[3] = { fenc->i_width[0], fenc->i_lines[0], 1 };
+    const size_t region[3] = { h->param.i_width, h->param.i_height, 1 };
     x264_opencl_frame_t *clfenc;
 
     // TODO: try to see if this can DMA.
@@ -127,7 +138,7 @@ static int x264_opencl_frame_upload( x264_t *h, x264_frame_t *fenc )
     if( h->opencl->b_image_support )
         CL_CHECK( err, clEnqueueWriteImage, h->opencl->queue, clfenc->plane[0], CL_FALSE, zero, region, fenc->i_stride[0], 0, fenc->plane[0], 0, NULL, &clfenc->uploaded[0] );
     else
-        CL_CHECK( err, clEnqueueWriteBuffer, h->opencl->queue, clfenc->plane[0], CL_FALSE, 0, fenc->i_stride[0] * fenc->i_width[0] * sizeof( *fenc->plane[0] ), fenc->plane[0], 0, NULL, &clfenc->uploaded[0] );
+        CL_CHECK( err, clEnqueueWriteBuffer, h->opencl->queue, clfenc->plane[0], CL_FALSE, 0, fenc->i_stride[0] * fenc->i_lines[0] * sizeof( *fenc->plane[0] ), fenc->plane[0], 0, NULL, &clfenc->uploaded[0] );
 
     fenc->opencl = clfenc;
     clfenc->i_ref_count++;
@@ -238,6 +249,7 @@ int x264_opencl_init( x264_t *h )
     x264_log( h, X264_LOG_INFO, "using %s\n", device_name );
     CL_CHECK( err, clGetDeviceInfo, devices[0], CL_DEVICE_IMAGE_SUPPORT, sizeof( image_support ), &image_support, NULL );
     opencl->b_image_support = (image_support == CL_TRUE);
+
 
     /* FIXME: Is delay correct? */
     for( int i = 0; i < h->frames.i_delay; i++ )
