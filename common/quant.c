@@ -68,7 +68,7 @@ static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int u
     int64_t en = 0;
     int count = 0;
 
-    memcpy( quant, dct, sizeof(quant[0])*64 );
+    memcpy( quant, dct, sizeof( quant ) );
 
     for( int i = 0; i < 64; i++ ) {
         QUANT_ONE(quant[i], mf[i], bias[i]);
