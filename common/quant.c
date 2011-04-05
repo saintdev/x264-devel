@@ -46,11 +46,56 @@
     nz |= (coef); \
 }
 
-static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64] )
+#define CALC_EN( a ) \
+    (a) * (a)
+
+#define UNQUANT_ONE( coef, mf, f ) \
+    (coef) = ((mf) * (coef) + (f)) >> 8
+
+static int sort_func( const void *a, const void *b )
+{
+    uint64_t dct1 = CALC_EN(**(dctcoef**)a);
+    uint64_t dct2 = CALC_EN(**(dctcoef**)b);
+
+
+    return (dct1<dct2) - (dct1>dct2);
+}
+
+static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int unquant[64] )
 {
     int nz = 0;
-    for( int i = 0; i < 64; i++ )
-        QUANT_ONE( dct[i], mf[i], bias[i] );
+    dctcoef *sort[64], quant[64];
+    int64_t en = 0;
+    int count = 0;
+
+    memcpy( quant, dct, sizeof(quant[0])*64 );
+
+    for( int i = 0; i < 64; i++ ) {
+        QUANT_ONE(quant[i], mf[i], bias[i]);
+        if( !quant[i] ) {
+            en += CALC_EN( dct[i] );
+            sort[count++] = dct + i;
+        }
+    }
+    if( count ) {
+        qsort( sort, count, sizeof(*sort), sort_func );
+        for(int i = 0; i < count; i++) {
+            int j = sort[i] - dct;
+            dctcoef tmp = 1;
+            quant[j] = dct[j] < 0 ? -1 : 1;
+            nz = 1;
+            UNQUANT_ONE( tmp, unquant[j], 128 );
+            en -= CALC_EN( tmp );
+            /* FIXME: use closest energy */
+            if (en <= 0) {
+//                 quant[j] = 0;
+                break;
+            }
+        }
+    }
+
+    memcpy( dct, quant, sizeof(dct[0])*64 );
+
     return !!nz;
 }
 
