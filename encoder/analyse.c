@@ -2802,10 +2802,10 @@ intra_analysis:
         if( analysis.i_mbrd )
             x264_intra_rd( h, &analysis, COST_MAX );
 
-        i_cost = analysis.i_satd_i8x8;
-        h->mb.i_type = I_8x8;
-//         COPY2_IF_LT( i_cost, analysis.i_satd_i4x4, h->mb.i_type, I_4x4 );
-//         COPY2_IF_LT( i_cost, analysis.i_satd_i8x8, h->mb.i_type, I_8x8 );
+        i_cost = analysis.i_satd_i16x16;
+        h->mb.i_type = I_16x16;
+        COPY2_IF_LT( i_cost, analysis.i_satd_i4x4, h->mb.i_type, I_4x4 );
+        COPY2_IF_LT( i_cost, analysis.i_satd_i8x8, h->mb.i_type, I_8x8 );
         if( analysis.i_satd_pcm < i_cost )
             h->mb.i_type = I_PCM;
 
