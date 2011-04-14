@@ -99,11 +99,41 @@ static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int u
     return !!nz;
 }
 
-static int quant_4x4( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16] )
+static int quant_4x4( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] )
 {
     int nz = 0;
-    for( int i = 0; i < 16; i++ )
-        QUANT_ONE( dct[i], mf[i], bias[i] );
+    dctcoef *sort[16], quant[16];
+    int64_t en = 0;
+    int count = 0;
+
+    memcpy( quant, dct, sizeof( quant ) );
+
+    for( int i = 0; i < 16; i++ ) {
+        QUANT_ONE(quant[i], mf[i], bias[i]);
+        if( i && !quant[i] ) {
+            en += CALC_EN( dct[i] );
+            sort[count++] = dct + i;
+        }
+    }
+    if( count ) {
+        qsort( sort, count, sizeof(*sort), sort_func );
+        for(int i = 0; i < count; i++) {
+            int j = sort[i] - dct;
+            dctcoef tmp = 1;
+            quant[j] = dct[j] < 0 ? -1 : 1;
+            nz = 1;
+            UNQUANT_ONE( tmp, unquant[j], 128 );
+            en -= CALC_EN( tmp );
+            /* FIXME: use closest energy */
+            if (en <= 0) {
+//                 quant[j] = 0;
+                break;
+            }
+        }
+    }
+
+    memcpy( dct, quant, sizeof(dct[0])*16 );
+
     return !!nz;
 }
 
