@@ -99,6 +99,14 @@ static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int u
     return !!nz;
 }
 
+int quant_4x4_chroma( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16] )
+{
+    int nz = 0;
+    for( int i = 0; i < 16; i++ )
+        QUANT_ONE(dct[i], mf[i], bias[i]);
+    return !!nz;
+}
+
 static int quant_4x4( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] )
 {
     int nz = 0;
@@ -401,6 +409,7 @@ void x264_quant_init( x264_t *h, int cpu, x264_quant_function_t *pf )
     pf->quant_8x8 = quant_8x8;
     pf->quant_4x4 = quant_4x4;
     pf->quant_4x4_dc = quant_4x4_dc;
+    pf->quant_4x4_chroma = quant_4x4_chroma;
     pf->quant_2x2_dc = quant_2x2_dc;
 
     pf->dequant_4x4 = dequant_4x4;
