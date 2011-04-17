@@ -30,7 +30,7 @@
 typedef struct
 {
     int (*quant_8x8)( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int unquant[64] );
-    int (*quant_4x4)( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] );
+    int (*quant_4x4)( dctcoef fenc_dct[16], dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] );
     int (*quant_4x4_chroma)( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16] );
     int (*quant_4x4_dc)( dctcoef dct[16], int mf, int bias );
     int (*quant_2x2_dc)( dctcoef dct[4], int mf, int bias );

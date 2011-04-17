@@ -107,40 +107,45 @@ int quant_4x4_chroma( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16] )
     return !!nz;
 }
 
-static int quant_4x4( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] )
+/* Things to try:
+ *  Select coeffs that are 0 after unquant + predicted for energy preservation (I suspect this is a bad idea)
+ *  Sort by magnitued of dct[] (??? - probably a bad idea)
+ *  When subtracting energy, stop at the closest to our threshold, instead of stopping after we go beyond. (probably a good idea)
+ *  Can we early terminate the unquant loop?
+ *  Split each macroblock into subblocks, and maintain energy in each subblock. (???)
+ */
+
+static int quant_4x4( dctcoef fenc_dct[16], dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] )
 {
     int nz = 0;
-    dctcoef *sort[16], quant[16];
+    dctcoef *sort[16], pred[16];
+    int sign[16];
     int64_t en = 0;
     int count = 0;
 
-    memcpy( quant, dct, sizeof( quant ) );
-
     for( int i = 0; i < 16; i++ ) {
-        QUANT_ONE(quant[i], mf[i], bias[i]);
-        if( i && !quant[i] ) {
-            en += CALC_EN( dct[i] );
-            sort[count++] = dct + i;
+        sign[i] = dct[i] < 0 ? -1 : 1;
+        pred[i] = fenc_dct[i] - dct[i];
+        QUANT_ONE(dct[i], mf[i], bias[i]);
+        if( i && !dct[i] ) {
+            en += CALC_EN( fenc_dct[i] );
+            sort[count++] = fenc_dct + i;
         }
     }
     if( count ) {
         qsort( sort, count, sizeof(*sort), sort_func );
         for(int i = 0; i < count; i++) {
-            int j = sort[i] - dct;
+            int j = sort[i] - fenc_dct;
             dctcoef tmp = 1;
-            quant[j] = dct[j] < 0 ? -1 : 1;
+            dct[j] = sign[j];
             nz = 1;
             UNQUANT_ONE( tmp, unquant[j], 128 );
+            tmp = pred[j] + tmp * sign[j];
             en -= CALC_EN( tmp );
-            /* FIXME: use closest energy */
-            if (en <= 0) {
-//                 quant[j] = 0;
+            if (en <= 0)
                 break;
-            }
         }
     }
-
-    memcpy( dct, quant, sizeof(dct[0])*16 );
 
     return !!nz;
 }
