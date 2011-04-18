@@ -47,10 +47,10 @@
 }
 
 #define CALC_EN( a ) \
-    (a) * (a)
+    abs((a))
 
-#define UNQUANT_ONE( coef, mf, f ) \
-    (coef) = ((mf) * (coef) + (f)) >> 8
+#define UNQUANT( coef, mf, f ) \
+    (((mf) * (coef) + (f)) >> 8)
 
 static int sort_func( const void *a, const void *b )
 {
@@ -61,7 +61,7 @@ static int sort_func( const void *a, const void *b )
     return (dct1<dct2) - (dct1>dct2);
 }
 
-static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int unquant[64] )
+static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int unquant_mf[64] )
 {
     int nz = 0;
     dctcoef *sort[64], quant[64];
@@ -84,7 +84,7 @@ static int quant_8x8( dctcoef dct[64], udctcoef mf[64], udctcoef bias[64], int u
             dctcoef tmp = 1;
             quant[j] = dct[j] < 0 ? -1 : 1;
             nz = 1;
-            UNQUANT_ONE( tmp, unquant[j], 128 );
+            tmp = UNQUANT( tmp, unquant_mf[j], 128 );
             en -= CALC_EN( tmp );
             /* FIXME: use closest energy */
             if (en <= 0) {
@@ -108,17 +108,16 @@ int quant_4x4_chroma( dctcoef dct[16], udctcoef mf[16], udctcoef bias[16] )
 }
 
 /* Things to try:
- *  Select coeffs that are 0 after unquant + predicted for energy preservation (I suspect this is a bad idea)
  *  Sort by magnitued of dct[] (??? - probably a bad idea)
  *  When subtracting energy, stop at the closest to our threshold, instead of stopping after we go beyond. (probably a good idea)
  *  Can we early terminate the unquant loop?
  *  Split each macroblock into subblocks, and maintain energy in each subblock. (???)
  */
 
-static int quant_4x4( dctcoef fenc_dct[16], dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant[16] )
+static int quant_4x4( dctcoef fenc_dct[16], dctcoef dct[16], udctcoef mf[16], udctcoef bias[16], int unquant_mf[16] )
 {
     int nz = 0;
-    dctcoef *sort[16], pred[16];
+    dctcoef *sort[16], pred[16], unquant_one[16], unquant[16];
     int sign[16];
     int64_t en = 0;
     int count = 0;
@@ -127,23 +126,24 @@ static int quant_4x4( dctcoef fenc_dct[16], dctcoef dct[16], udctcoef mf[16], ud
         sign[i] = dct[i] < 0 ? -1 : 1;
         pred[i] = fenc_dct[i] - dct[i];
         QUANT_ONE(dct[i], mf[i], bias[i]);
-        if( i && !dct[i] ) {
+        unquant[i] = pred[i] + UNQUANT( abs(dct[i]), unquant_mf[i], 128) * sign[i];
+        if( i && !unquant[i] && fenc_dct[i] ) {
+            unquant_one[i] = pred[i] + UNQUANT( 1, unquant_mf[i], 128 ) * sign[i];
             en += CALC_EN( fenc_dct[i] );
             sort[count++] = fenc_dct + i;
         }
     }
+
     if( count ) {
         qsort( sort, count, sizeof(*sort), sort_func );
         for(int i = 0; i < count; i++) {
             int j = sort[i] - fenc_dct;
-            dctcoef tmp = 1;
             dct[j] = sign[j];
-            nz = 1;
-            UNQUANT_ONE( tmp, unquant[j], 128 );
-            tmp = pred[j] + tmp * sign[j];
-            en -= CALC_EN( tmp );
-            if (en <= 0)
+            en -= CALC_EN( unquant_one[j] );
+            if (en <= 0) {
+                nz = 1;
                 break;
+            }
         }
     }
 
