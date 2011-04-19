@@ -100,7 +100,7 @@ static ALWAYS_INLINE int x264_quant_8x8( x264_t *h, dctcoef dct[64], int i_qp, i
     if( h->mb.b_trellis )
         return x264_quant_8x8_trellis( h, dct, i_quant_cat, i_qp, b_intra, idx );
     else
-        return h->quantf.quant_8x8( dct, h->quant8_mf[i_quant_cat][i_qp], h->quant8_bias[i_quant_cat][i_qp], h->unquant8_mf[i_quant_cat][i_qp] );
+        return h->quantf.quant_8x8( h->mb.pic.fenc_dct8[idx], dct, h->quant8_mf[i_quant_cat][i_qp], h->quant8_bias[i_quant_cat][i_qp], h->unquant8_mf[i_quant_cat][i_qp] );
 }
 
 /* All encoding functions must output the correct CBP and NNZ values.
